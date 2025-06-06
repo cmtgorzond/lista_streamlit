@@ -12,12 +12,12 @@ class RocketReachClient:
         self.headers = {
             "Api-Key": self.api_key,
             "Content-Type": "application/json",
-            "User-Agent": "StreamlitApp/1.0"
+            "Accept": "application/json"
         }
         self.rate_limit_delay = 1.5
 
     def search_people(self, domain: str, include_titles: List[str], exclude_titles: List[str]) -> Optional[Dict]:
-        """Wyszukuje osoby z obsługą limitów i błędów"""
+        """Wysyła zapytanie do RocketReach API z poprawną strukturą"""
         payload = {
             "query": {
                 "company_domain": domain,
@@ -27,10 +27,8 @@ class RocketReachClient:
                 }
             },
             "start": 1,
-            "page_size": 5,
-            "dedup_emails": True
+            "page_size": 5
         }
-
         for attempt in range(3):
             try:
                 response = requests.post(
@@ -39,28 +37,28 @@ class RocketReachClient:
                     json=payload,
                     timeout=10
                 )
-                
                 if response.status_code == 429:
-                    retry_after = int(response.headers.get('Retry-After', 30))
+                    retry_after = int(response.headers.get("Retry-After", 30))
                     time.sleep(retry_after)
                     continue
-                    
                 response.raise_for_status()
                 return response.json()
-                
             except requests.exceptions.HTTPError as errh:
                 st.error(f"Błąd HTTP: {errh}")
+                if response.status_code == 400:
+                    error_msg = response.json().get("detail", "Nieznany błąd")
+                    st.error(f"Szczegóły błędu: {error_msg}")
+                return None
             except Exception as e:
                 st.error(f"Inny błąd: {str(e)}")
-            
+                return None
             time.sleep(self.rate_limit_delay * (attempt + 1))
-        
         return None
 
 def clean_domain(url: str) -> str:
-    """Czyści i normalizuje domenę"""
-    domain = re.sub(r"https?://(www\.)?", "", url, flags=re.IGNORECASE)
-    domain = domain.split('/')[0].strip().lower()
+    """Czyści domenę do formatu wymaganego przez API"""
+    domain = re.sub(r"(https?:\/\/)?(www\.)?", "", url, flags=re.IGNORECASE)
+    domain = re.split(r"\/|\?|#", domain)[0].strip().lower()
     return re.sub(r"[^a-z0-9.-]", "", domain)
 
 def process_profiles(profiles: List[Dict]) -> List[Dict]:
@@ -107,14 +105,13 @@ def main():
         st.subheader("🎯 Filtry Stanowisk")
         include_titles = st.text_input(
             "➕ Włączane stanowiska (oddziel przecinkami)",
-            value="M&A, Corporate Development, Strategy",
+            value="M&A,Corporate Development,Strategy",
             help="Np.: 'M&A, M&A Analyst, Strategic Development'"
         )
         exclude_titles = st.text_input(
             "➖ Wykluczane stanowiska (oddziel przecinkami)",
             help="Np.: 'HR, Marketing, Sales'"
         )
-        
         include_list = [title.strip() for title in include_titles.split(",") if title.strip()]
         exclude_list = [title.strip() for title in exclude_titles.split(",") if title.strip()]
         
@@ -145,6 +142,14 @@ def main():
                     domain = clean_domain(row['website'])
                     status_text.text(f"🔍 Przetwarzanie: {domain}")
                     
+                    if not domain:
+                        st.warning(f"Nieprawidłowa domena: {row['website']}")
+                        continue
+                    
+                    if not include_list:
+                        st.error("Musisz podać przynajmniej jedno stanowisko do włączenia")
+                        break
+                        
                     response = client.search_people(domain, include_list, exclude_list)
                     
                     if response and 'profiles' in response:
@@ -177,6 +182,14 @@ def main():
                 cleaned_domain = clean_domain(domain)
                 status_text.text(f"🔍 Przetwarzanie: {cleaned_domain}")
                 
+                if not cleaned_domain:
+                    st.warning(f"Nieprawidłowa domena: {domain}")
+                    continue
+                    
+                if not include_list:
+                    st.error("Musisz podać przynajmniej jedno stanowisko do włączenia")
+                    break
+                    
                 response = client.search_people(cleaned_domain, include_list, exclude_list)
                 
                 if response and 'profiles' in response:
