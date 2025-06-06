@@ -10,142 +10,151 @@ class RocketReachClient:
         self.api_key = api_key
         self.base_url = "https://api.rocketreach.co/api/v2"
         self.headers = {
-            "accept": "application/json",
-            "content-type": "application/json",
-            "Api-Key": self.api_key
+            "Api-Key": self.api_key,
+            "Content-Type": "application/json",
+            "User-Agent": "StreamlitApp/1.0"
         }
 
     def search_people(self, domain: str, titles: List[str], excluded_titles: List[str]) -> Dict:
-        """Wykonuje zapytanie wyszukiwania osób"""
+        """Wykonuje zapytanie wyszukiwania osób z obsługą błędów"""
         url = f"{self.base_url}/person/search"
         payload = {
             "query": {
-                "company_domain": [domain],
+                "company_domain": domain,
                 "current_title": titles,
                 "exclude_current_title": excluded_titles
             },
+            "start": 1,
             "page_size": 5,
-            "start": 1
+            "dedup_emails": True
         }
         
         try:
-            response = requests.post(url, json=payload, headers=self.headers)
-            if response.status_code == 200:
-                return response.json()
-            return {}
-        except Exception as e:
-            st.error(f"Błąd połączenia: {str(e)}")
-            return {}
+            response = requests.post(
+                url,
+                headers=self.headers,
+                json=payload,
+                timeout=10
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as errh:
+            st.error(f"Błąd HTTP: {errh}")
+        except requests.exceptions.ConnectionError as errc:
+            st.error(f"Błąd połączenia: {errc}")
+        except requests.exceptions.Timeout as errt:
+            st.error(f"Timeout: {errt}")
+        except Exception as err:
+            st.error(f"Inny błąd: {err}")
+        return {}
 
-def process_domain(client: RocketReachClient, domain: str, include: List[str], exclude: List[str]) -> Dict:
-    """Przetwarza pojedynczą domenę i zwraca wyniki"""
-    cleaned_domain = re.sub(r"https?://(www\.)?", "", domain).split('/')[0].strip()
+def clean_domain(url: str) -> str:
+    """Czyści i weryfikuje domenę"""
+    domain = re.sub(r"https?://(www\.)?", "", url).split('/')[0].strip().lower()
+    return re.sub(r"[^a-z0-9.-]", "", domain)
+
+def process_profiles(profiles: List[Dict]) -> List[Dict]:
+    """Przetwarza profile na strukturalne dane"""
+    processed = []
+    for profile in profiles:
+        person = {
+            'name': f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip(),
+            'title': profile.get('current_title', ''),
+            'email': next((e['email'] for e in profile.get('emails', []) if e.get('type') == 'work'), ''),
+            'linkedin': next((l['url'] for l in profile.get('links', []) if 'linkedin' in l.get('type', '').lower()), '')
+        }
+        processed.append(person)
+    return processed
+
+def search_contacts(client: RocketReachClient, domains: List[str], include: List[str], exclude: List[str]):
+    """Przetwarza listę domen i wyświetla wyniki"""
+    results = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    results = client.search_people(cleaned_domain, include, exclude)
-    
-    output = {"Domena": cleaned_domain}
-    
-    if results.get('profiles'):
-        for i, profile in enumerate(results['profiles'][:5]):  # Ogranicz do 5 wyników
-            output.update({
-                f"Osoba {i+1} - Imię i nazwisko": f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip(),
-                f"Osoba {i+1} - Stanowisko": profile.get('current_title', ''),
-                f"Osoba {i+1} - Email": next((e['email'] for e in profile.get('emails', []) if e.get('type') == 'work'), ''),
-                f"Osoba {i+1} - LinkedIn": next((l['url'] for l in profile.get('links', []) if 'linkedin' in l.get('type', '').lower()), '')
+    for idx, domain in enumerate(domains):
+        status_text.text(f"🔍 Przeszukuję: {domain}")
+        
+        cleaned_domain = clean_domain(domain)
+        if not cleaned_domain:
+            st.warning(f"Nieprawidłowa domena: {domain}")
+            continue
+            
+        max_retries = 3
+        for attempt in range(max_retries):
+            response = client.search_people(cleaned_domain, include, exclude)
+            
+            if response.get('profiles'):
+                processed = process_profiles(response['profiles'])
+                if processed:
+                    results.extend(format_results(cleaned_domain, processed))
+                    break
+            elif response.get('error') == 'rate_limit_exceeded':
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+            else:
+                results.append({
+                    "Domena": cleaned_domain,
+                    "Status": "Nie znaleziono kontaktów",
+                    "Szczegóły": response.get('message', 'Brak danych')
+                })
+                break
+        else:
+            results.append({
+                "Domena": cleaned_domain,
+                "Status": "Błąd połączenia",
+                "Szczegóły": "Przekroczono limit prób"
             })
-    else:
-        output["Status"] = "nie znaleziono kontaktów"
-    
-    return output
+        
+        progress_bar.progress((idx + 1) / len(domains))
+        time.sleep(1.5)
 
-def main():
-    st.set_page_config(page_title="🏢 Wyszukiwarka kontaktów", layout="wide")
-    st.title("🔍 Zaawansowane wyszukiwanie kontaktów B2B")
+    progress_bar.empty()
+    status_text.empty()
+    display_results(pd.DataFrame(results))
+
+def format_results(domain: str, profiles: List[Dict], max_contacts: int = 5) -> List[Dict]:
+    """Formatuje wyniki do struktury tabelarycznej"""
+    expanded = []
+    for i in range(max_contacts):
+        if i < len(profiles):
+            expanded.append({
+                "Domena": domain,
+                f"Osoba {i+1} - Imię i nazwisko": profiles[i]['name'],
+                f"Osoba {i+1} - Stanowisko": profiles[i]['title'],
+                f"Osoba {i+1} - Email": profiles[i]['email'],
+                f"Osoba {i+1} - LinkedIn": profiles[i]['linkedin']
+            })
+        else:
+            expanded.append({
+                "Domena": domain,
+                f"Osoba {i+1} - Imię i nazwisko": "",
+                f"Osoba {i+1} - Stanowisko": "",
+                f"Osoba {i+1} - Email": "",
+                f"Osoba {i+1} - LinkedIn": ""
+            })
+    return expanded
+
+def display_results(df: pd.DataFrame):
+    """Wyświetla wyniki w formie tabeli"""
+    st.subheader("📊 Wyniki wyszukiwania")
     
-    with st.sidebar:
-        st.header("⚙️ Konfiguracja")
-        api_key = st.text_input("🔑 Klucz API RocketReach", type="password")
-        
-        st.subheader("🎯 Filtry stanowisk")
-        include_titles = st.text_input(
-            "➕ Włączane stanowiska (oddziel przecinkami)",
-            value="M&A, M and A, corporate development, strategy, strategic, growth, merger",
-            help="Np.: 'M&A, corporate development'"
-        )
-        exclude_titles = st.text_input(
-            "➖ Wykluczane stanowiska (oddziel przecinkami)",
-            help="Np.: 'HR, marketing'"
-        )
-        
-    if not api_key:
-        st.warning("⚠️ Wprowadź klucz API w panelu bocznym")
+    if df.empty:
+        st.info("Brak wyników do wyświetlenia")
         return
     
-    client = RocketReachClient(api_key)
-    include_list = [x.strip() for x in include_titles.split(",") if x.strip()]
-    exclude_list = [x.strip() for x in exclude_titles.split(",") if x.strip()]
+    df = df[df.filter(like='Osoba').ne('').any(axis=1)]
     
-    st.subheader("📤 Wprowadź dane")
-    input_method = st.radio("Wybierz metodę wprowadzania:", ["Plik CSV", "Ręczne wprowadzanie"])
-    
-    results = []
-    
-    if input_method == "Plik CSV":
-        uploaded_file = st.file_uploader("Prześlij plik CSV", type=["csv"])
-        if uploaded_file:
-            df = pd.read_csv(uploaded_file)
-            if 'website' not in df.columns:
-                st.error("❌ Brak wymaganej kolumny 'website' w pliku CSV")
-                return
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for idx, row in df.iterrows():
-                status_text.text(f"Przetwarzanie: {row['website']}")
-                result = process_domain(client, row['website'], include_list, exclude_list)
-                results.append(result)
-                progress_bar.progress((idx + 1) / len(df))
-                time.sleep(1)  # Rate limiting
-            
-            progress_bar.empty()
-            status_text.empty()
-    else:
-        domains = st.text_area("Wprowadź domeny (jedna na linijkę)", height=150)
-        if st.button("Szukaj"):
-            domains_list = [d.strip() for d in domains.split('\n') if d.strip()]
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for idx, domain in enumerate(domains_list):
-                status_text.text(f"Przetwarzanie: {domain}")
-                result = process_domain(client, domain, include_list, exclude_list)
-                results.append(result)
-                progress_bar.progress((idx + 1) / len(domains_list))
-                time.sleep(1)  # Rate limiting
-            
-            progress_bar.empty()
-            status_text.empty()
-    
-    if results:
-        df = pd.DataFrame(results)
-        st.subheader("📊 Wyniki wyszukiwania")
-        
-        # Podświetlanie wierszy bez wyników
-        def highlight_row(row):
-            return ['background-color: #ffebee' if 'nie znaleziono' in str(v) else '' for v in row]
-        
+    if not df.empty:
         st.dataframe(
-            df.style.apply(highlight_row, axis=1),
-            height=600,
+            df,
             use_container_width=True,
             column_config={
                 "LinkedIn": st.column_config.LinkColumn("LinkedIn")
             }
         )
         
-        # Eksport wyników
         csv = df.to_csv(index=False, sep=';', encoding='utf-8-sig')
         st.download_button(
             label="💾 Pobierz wyniki jako CSV",
@@ -153,6 +162,62 @@ def main():
             file_name=f"kontakty_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
             mime="text/csv"
         )
+    else:
+        st.info("Nie znaleziono żadnych kontaktów spełniających kryteria")
+
+def main():
+    st.set_page_config(page_title="🏢 Zaawansowana Wyszukiwarka Kontaktów", layout="wide")
+    st.title("🔍 Wyszukiwarka Kontaktów B2B")
+    
+    with st.sidebar:
+        st.header("⚙️ Konfiguracja")
+        api_key = st.text_input("🔑 Klucz API RocketReach", type="password")
+        
+        st.subheader("🎯 Filtry Stanowisk")
+        include_titles = st.text_input(
+            "➕ Włączane stanowiska (oddziel przecinkami)",
+            value="M&A,Corporate Development,Strategy",
+            help="Np.: 'M&A, M&A Analyst, Strategic Development'"
+        )
+        exclude_titles = st.text_input(
+            "➖ Wykluczane stanowiska (oddziel przecinkami)",
+            help="Np.: 'HR, Marketing, Sales'"
+        )
+        
+        include_list = [x.strip().title() for x in include_titles.split(",") if x.strip()]
+        exclude_list = [x.strip().title() for x in exclude_titles.split(",") if x.strip()]
+        
+        st.markdown("---")
+        st.subheader("📤 Dane Wejściowe")
+        input_method = st.radio("Metoda wprowadzania:", ["Plik CSV", "Ręczne wprowadzanie"])
+
+    if not api_key:
+        st.warning("⚠️ Wprowadź klucz API w panelu bocznym")
+        return
+
+    client = RocketReachClient(api_key)
+    
+    if input_method == "Plik CSV":
+        uploaded_file = st.file_uploader("📤 Prześlij plik CSV", type=["csv"])
+        if uploaded_file:
+            try:
+                df = pd.read_csv(uploaded_file)
+                if 'website' not in df.columns:
+                    st.error("❌ Brak wymaganej kolumny 'website' w pliku CSV")
+                    return
+                domains = [clean_domain(row['website']) for _, row in df.iterrows()]
+                search_contacts(client, domains, include_list, exclude_list)
+            except Exception as e:
+                st.error(f"Błąd przetwarzania pliku CSV: {str(e)}")
+    else:
+        domains = st.text_area(
+            "🌐 Wprowadź domeny firm (jedna na linijkę)",
+            height=150,
+            placeholder="przykład.com\nfirma.pl\ninna-firma.net"
+        )
+        if st.button("🔍 Wyszukaj kontakty", type="primary"):
+            domains_list = [d.strip() for d in domains.split('\n') if d.strip()]
+            search_contacts(client, domains_list, include_list, exclude_list)
 
 if __name__ == "__main__":
     main()
