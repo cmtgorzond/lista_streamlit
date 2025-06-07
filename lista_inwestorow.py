@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import re
 import time
+from typing import List, Dict
 
 class RocketReachClient:
     def __init__(self, api_key: str):
@@ -11,24 +12,22 @@ class RocketReachClient:
         self.headers = {
             "Api-Key": self.api_key,
             "Content-Type": "application/json",
-            "Accept": "application/json"  # WYMAGANE przez API
+            "Accept": "application/json"
         }
 
     def search_people(self, domain: str, titles: List[str]) -> Dict:
-        """Poprawiona struktura zapytań zgodnie z dokumentacją"""
+        """Wyszukuje osoby według określonych kryteriów"""
         cleaned_domain = self._clean_domain(domain)
-        
         payload = {
             "query": {
-                "company_domain": cleaned_domain,  # KLUCZOWA ZMIANA
+                "company_domain": cleaned_domain,
                 "current_title": {
-                    "include": titles  # NOWA STRUKTURA
+                    "include": titles
                 }
             },
             "start": 1,
             "page_size": 5
         }
-
         try:
             response = requests.post(
                 f"{self.base_url}/person/search",
@@ -39,7 +38,7 @@ class RocketReachClient:
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            st.error(f"Błąd API: {response.text if response else str(e)}")
+            st.error(f"Błąd API: {response.text if 'response' in locals() else str(e)}")
             return {}
 
     @staticmethod
@@ -51,7 +50,6 @@ def main():
     st.set_page_config(page_title="Wyszukiwarka Kontaktów", layout="wide")
     st.title("🔍 Wyszukiwarka Kontaktów B2B")
     
-    # Panel boczny
     with st.sidebar:
         api_key = st.text_input("Klucz API RocketReach", type="password")
         st.markdown("---")
@@ -63,7 +61,6 @@ def main():
         
     client = RocketReachClient(api_key)
     
-    # Główny formularz
     domain = st.text_input("Wprowadź domenę firmy", value="nvidia.com")
     
     if st.button("Szukaj"):
