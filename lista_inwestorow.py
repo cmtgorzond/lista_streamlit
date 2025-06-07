@@ -1,100 +1,75 @@
 import streamlit as st
-import requests
 import pandas as pd
-import re
-import time
-from typing import List, Dict
+import requests
 
-class RocketReachClient:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.base_url = "https://api.rocketreach.co/api/v2"
-        self.headers = {
-            "Api-Key": self.api_key,
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
+st.set_page_config(page_title="RocketReach Contact Finder", layout="wide")
+st.title("🔍 RocketReach - People Search by Company Website")
 
-    def search_people(self, domain: str, titles: List[str]) -> Dict:
-        """Wyszukuje osoby według określonych kryteriów"""
-        cleaned_domain = self._clean_domain(domain)
-        payload = {
-            "query": {
-                "company_domain": cleaned_domain,
-                "current_title": {
-                    "include": titles
-                }
-            },
-            "start": 1,
-            "page_size": 5
-        }
-        try:
-            response = requests.post(
-                f"{self.base_url}/person/search",
-                headers=self.headers,
-                json=payload,
-                timeout=10
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            st.error(f"Błąd API: {response.text if 'response' in locals() else str(e)}")
-            return {}
+# API Key (tu wpisz swój klucz)
+API_KEY = "YOUR_API_KEY"
 
-    @staticmethod
-    def _clean_domain(url: str) -> str:
-        """Czyści domenę do formatu wymaganego przez API"""
-        return re.sub(r"https?://(www\.)?", "", url).split('/')[0].strip().lower()
+# Formularz konfiguracji
+uploaded_file = st.file_uploader("📄 Wgraj plik CSV z kolumną A (strony internetowe firm)", type=["csv"])
+include_keywords = st.text_area("🔎 Wpisz słowa kluczowe dla stanowisk (oddziel przecinkami)", "M&A,corporate development,strategy,strategic,growth,merger")
+exclude_keywords = st.text_area("🚫 Wyklucz stanowiska zawierające (oddziel przecinkami)", "")
 
-def main():
-    st.set_page_config(page_title="Wyszukiwarka Kontaktów", layout="wide")
-    st.title("🔍 Wyszukiwarka Kontaktów B2B")
-    
-    with st.sidebar:
-        api_key = st.text_input("Klucz API RocketReach", type="password")
-        st.markdown("---")
-        titles = st.text_input("Stanowiska (oddziel przecinkami)", value="M&A,Corporate Development,Strategy")
-    
-    if not api_key:
-        st.warning("Wprowadź klucz API w panelu bocznym")
-        return
-        
-    client = RocketReachClient(api_key)
-    
-    domain = st.text_input("Wprowadź domenę firmy", value="nvidia.com")
-    
-    if st.button("Szukaj"):
-        title_list = [t.strip() for t in titles.split(",") if t.strip()]
-        
-        if not title_list:
-            st.error("Musisz podać przynajmniej jedno stanowisko")
-            return
-            
-        start_time = time.time()
-        results = client.search_people(domain, title_list)
-        
-        if 'profiles' in results and results['profiles']:
-            data = []
-            for profile in results['profiles']:
-                row = {
-                    "Imię i nazwisko": f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip(),
-                    "Stanowisko": profile.get('current_title', ''),
-                    "Email": next((e['email'] for e in profile.get('emails', []) if e.get('type') == 'work'), ''),
-                    "LinkedIn": next((l['url'] for l in profile.get('links', []) if 'linkedin' in l.get('type', '').lower()), '')
-                }
-                data.append(row)
-            
-            df = pd.DataFrame(data)
-            st.dataframe(
-                df,
-                use_container_width=True,
-                column_config={
-                    "LinkedIn": st.column_config.LinkColumn("LinkedIn")
-                }
-            )
-            st.success(f"Znaleziono {len(data)} wyników w {time.time()-start_time:.2f}s")
-        else:
-            st.error("Nie znaleziono kontaktów")
+def fetch_contacts(domain, include, exclude):
+    url = "https://api.rocketreach.co/v1/api/search/person"
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    params = {
+        "company_domain": domain,
+        "current_employer": True,
+        "page_size": 20
+    }
+    response = requests.get(url, headers=headers, params=params)
 
-if __name__ == "__main__":
-    main()
+    if response.status_code != 200:
+        return "błąd API", []
+
+    data = response.json().get("results", [])
+    filtered = []
+    for person in data:
+        job_title = (person.get("current_title") or "").lower()
+        if any(keyword.lower() in job_title for keyword in include) and not any(bad.lower() in job_title for bad in exclude):
+            filtered.append({
+                "name": person.get("name"),
+                "title": person.get("current_title"),
+                "email": person.get("email", "brak"),
+                "linkedin": person.get("linkedin_url", "brak")
+            })
+        if len(filtered) == 5:
+            break
+
+    return None, filtered
+
+if uploaded_file:
+    df_input = pd.read_csv(uploaded_file)
+    domains = df_input.iloc[:, 0].dropna().tolist()
+
+    include = [k.strip().lower() for k in include_keywords.split(",")]
+    exclude = [k.strip().lower() for k in exclude_keywords.split(",")]
+
+    output_rows = []
+    with st.spinner("🔄 Przetwarzanie danych..."):
+        for domain in domains:
+            error, contacts = fetch_contacts(domain, include, exclude)
+            row = {"domain": domain}
+            if error:
+                row["status"] = error
+            elif not contacts:
+                row["status"] = "nie znaleziono kontaktów"
+            else:
+                row["status"] = "OK"
+                for i, c in enumerate(contacts, start=1):
+                    row[f"name_{i}"] = c["name"]
+                    row[f"title_{i}"] = c["title"]
+                    row[f"email_{i}"] = c["email"]
+                    row[f"linkedin_{i}"] = c["linkedin"]
+            output_rows.append(row)
+
+    df_result = pd.DataFrame(output_rows)
+    st.success("✅ Gotowe!")
+    st.dataframe(df_result)
+
+    csv = df_result.to_csv(index=False).encode('utf-8')
+    st.download_button("⬇️ Pobierz wyniki jako CSV", data=csv, file_name="wyniki.csv", mime="text/csv")
