@@ -10,20 +10,25 @@ class RocketReachClient:
         self.api_key = api_key
         self.base_url = "https://api.rocketreach.co/api/v2"
         self.headers = {
-            "accept": "application/json",
-            "content-type": "application/json",
-            "Api-Key": self.api_key
+            "Api-Key": self.api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json"  # Dodaj ten nagłówek
         }
 
-    def search_people(self, domain: str, titles: List[str]) -> Dict:
-        """Wysyła zapytanie zgodne z dokumentacją RocketReach"""
+    def search_people(self, domain: str, include_titles: List[str], exclude_titles: List[str] = None) -> Dict:
+        """Poprawiona struktura zapytania zgodna z dokumentacją API"""
         cleaned_domain = self.clean_domain(domain)
         
+        if not cleaned_domain:
+            st.error("Nieprawidłowy format domeny")
+            return {}
+
         payload = {
             "query": {
                 "company_domain": cleaned_domain,
                 "current_title": {
-                    "include": titles
+                    "include": include_titles,
+                    "exclude": exclude_titles or []
                 }
             },
             "start": 1,
@@ -37,75 +42,83 @@ class RocketReachClient:
                 json=payload,
                 timeout=10
             )
+            
+            if response.status_code == 400:
+                error_details = response.json().get('detail', 'Nieznany błąd')
+                st.error(f"Błąd API: {error_details}")
+                return {}
+
             response.raise_for_status()
             return response.json()
-        except requests.exceptions.HTTPError as errh:
-            st.error(f"Błąd HTTP {response.status_code}: {response.text}")
-            return {}
-        except Exception as e:
+            
+        except requests.exceptions.RequestException as e:
             st.error(f"Błąd połączenia: {str(e)}")
             return {}
 
     @staticmethod
     def clean_domain(url: str) -> str:
-        """Czyści domenę do formatu wymaganego przez API"""
-        return re.sub(r"https?://(www\.)?", "", url).split('/')[0].strip().lower()
+        """Zaawansowane czyszczenie domeny"""
+        if not url:
+            return ""
+            
+        # Usuń protokół i ścieżki
+        domain = re.sub(r"https?://", "", url, flags=re.IGNORECASE)
+        domain = re.split(r"/|\?|#", domain)[0]
+        
+        # Usuń www i subdomeny
+        domain = re.sub(r"^www\.", "", domain)
+        
+        # Usuń białe znaki i konwertuj na małe litery
+        return domain.strip().lower()
 
 def main():
     st.set_page_config(page_title="Wyszukiwarka Kontaktów", layout="wide")
     st.title("🔍 Wyszukiwarka Kontaktów B2B")
     
-    # Panel konfiguracyjny
     with st.sidebar:
         api_key = st.text_input("Klucz API RocketReach", type="password")
         st.markdown("---")
-        titles = st.text_input("Stanowiska (oddziel przecinkami)", value="sales,M&A")
+        include_titles = st.text_input("Stanowiska do włączenia (oddziel przecinkami)", value="M&A,Strategy")
     
     if not api_key:
         st.warning("Wprowadź klucz API w panelu bocznym")
         return
-    
+        
     client = RocketReachClient(api_key)
     
-    # Główny formularz
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        domain = st.text_input("Domena firmy", value="https://www.nvidia.com/")
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Szukaj", type="primary"):
-            with st.spinner("Przeszukuję..."):
-                start_time = time.time()
-                
-                # Przetwarzanie zapytania
-                title_list = [t.strip() for t in titles.split(",")]
-                results = client.search_people(domain, title_list)
-                
-                # Wyświetlanie wyników
-                if results.get('profiles'):
-                    data = []
-                    for profile in results['profiles']:
-                        row = {
-                            "Imię i nazwisko": f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip(),
-                            "Stanowisko": profile.get('current_title', ''),
-                            "Email": next((e['email'] for e in profile.get('emails', []) if e.get('type') == 'work'), ''),
-                            "LinkedIn": profile.get('linkedin_url', '')
-                        }
-                        data.append(row)
-                    
-                    df = pd.DataFrame(data)
-                    st.dataframe(
-                        df,
-                        use_container_width=True,
-                        column_config={
-                            "LinkedIn": st.column_config.LinkColumn("LinkedIn")
-                        }
-                    )
-                    
-                    # Statystyki
-                    st.success(f"Znaleziono {len(data)} wyników w {time.time()-start_time:.2f}s")
-                else:
-                    st.error("Nie znaleziono kontaktów")
+    domain = st.text_input("Wprowadź domenę firmy", value="nvidia.com")
+    
+    if st.button("Szukaj"):
+        title_list = [t.strip() for t in include_titles.split(",") if t.strip()]
+        
+        if not title_list:
+            st.error("Musisz podać przynajmniej jedno stanowisko")
+            return
+            
+        results = client.search_people(domain, title_list)
+        
+        if not results.get('profiles'):
+            st.error("Nie znaleziono kontaktów")
+            return
+            
+        data = []
+        for profile in results['profiles']:
+            row = {
+                "Imię i nazwisko": f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip(),
+                "Stanowisko": profile.get('current_title', ''),
+                "Email": next((e['email'] for e in profile.get('emails', []) if e.get('type') == 'work'), ''),
+                "LinkedIn": next((l['url'] for l in profile.get('links', []) if 'linkedin' in l.get('type', '').lower()), '')
+            }
+            data.append(row)
+        
+        df = pd.DataFrame(data)
+        st.dataframe(
+            df,
+            use_container_width=True,
+            column_config={
+                "LinkedIn": st.column_config.LinkColumn("LinkedIn")
+            }
+        )
 
 if __name__ == "__main__":
     main()
