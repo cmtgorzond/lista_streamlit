@@ -3,6 +3,18 @@ import pandas as pd
 import requests
 import time
 from typing import List, Dict
+
+# Sprawdź czy openpyxl jest zainstalowane, jeśli nie - zainstaluj
+try:
+    import openpyxl
+except ImportError:
+    st.error("Biblioteka openpyxl nie jest zainstalowana. Instaluję...")
+    import subprocess
+    import sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
+    import openpyxl
+    st.success("Biblioteka openpyxl została zainstalowana!")
+
 import io
 
 class RocketReachAPI:
@@ -34,7 +46,7 @@ class RocketReachAPI:
                         "current_title": [title.strip()]
                     },
                     "start": 1,
-                    "page_size": 20  # Zwiększono limit aby mieć więcej opcji
+                    "page_size": 20
                 }
                 
                 response = requests.post(
@@ -46,7 +58,6 @@ class RocketReachAPI:
                 if response.status_code == 201:
                     data = response.json()
                     for person in data.get('profiles', []):
-                        # Sprawdź wykluczenia
                         current_title = person.get('current_title', '').lower()
                         if exclude_titles and any(excl.lower() in current_title for excl in exclude_titles if excl.strip()):
                             continue
@@ -84,11 +95,6 @@ class RocketReachAPI:
             if response.status_code == 200:
                 data = response.json()
                 
-                # Hierarchia wyboru emaila:
-                # 1. recommended_professional_email
-                # 2. current_work_email
-                # 3. Najlepszy email zawodowy z listy emails
-                
                 professional_email = ""
                 email_type = ""
                 email_grade = ""
@@ -97,7 +103,6 @@ class RocketReachAPI:
                 # Pierwsza opcja: recommended_professional_email
                 if data.get('recommended_professional_email'):
                     professional_email = data.get('recommended_professional_email')
-                    # Znajdź szczegóły dla tego emaila
                     for email_obj in data.get('emails', []):
                         if email_obj.get('email') == professional_email:
                             email_type = email_obj.get('type', '')
@@ -108,7 +113,6 @@ class RocketReachAPI:
                 # Druga opcja: current_work_email
                 elif data.get('current_work_email'):
                     professional_email = data.get('current_work_email')
-                    # Znajdź szczegóły dla tego emaila
                     for email_obj in data.get('emails', []):
                         if email_obj.get('email') == professional_email:
                             email_type = email_obj.get('type', '')
@@ -118,7 +122,6 @@ class RocketReachAPI:
                 
                 # Trzecia opcja: najlepszy email zawodowy z listy
                 elif 'emails' in data:
-                    # Filtruj tylko emaile z smtp_valid != 'invalid'
                     valid_professional_emails = [
                         email_obj for email_obj in data['emails']
                         if (email_obj.get('type') == 'professional' and 
@@ -126,7 +129,6 @@ class RocketReachAPI:
                     ]
                     
                     if valid_professional_emails:
-                        # Sortuj według grade (A > A- > B > B- > C > D > F)
                         grade_order = {'A': 1, 'A-': 2, 'B': 3, 'B-': 4, 'C': 5, 'D': 6, 'F': 7}
                         valid_professional_emails.sort(
                             key=lambda x: grade_order.get(x.get('grade', 'F'), 8)
@@ -138,7 +140,7 @@ class RocketReachAPI:
                         email_grade = best_email.get('grade', '')
                         smtp_valid = best_email.get('smtp_valid', '')
                 
-                # Sprawdź czy email ma smtp_valid = 'invalid' - jeśli tak, zwróć pusty wynik
+                # Sprawdź czy email ma smtp_valid = 'invalid'
                 if smtp_valid == 'invalid':
                     return {}
                 
@@ -159,6 +161,18 @@ class RocketReachAPI:
         except Exception as e:
             st.error(f"Błąd pobierania szczegółów: {str(e)}")
             return {}
+
+def create_excel_file(results_df: pd.DataFrame) -> bytes:
+    """Tworzy plik Excel i zwraca jako bytes"""
+    try:
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            results_df.to_excel(writer, index=False, sheet_name='Kontakty')
+        return output.getvalue()
+    except Exception as e:
+        st.error(f"Błąd tworzenia pliku Excel: {str(e)}")
+        # Fallback do CSV jeśli Excel nie działa
+        return results_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
 def main():
     st.set_page_config(page_title="🎯 Wyszukiwanie kontaktów do inwestorów", layout="wide")
@@ -233,14 +247,12 @@ def main():
             for i, website in enumerate(websites):
                 status_text.text(f"Analizowanie: {website} ({i+1}/{len(websites)})")
                 
-                # Wyszukaj osoby
                 people = rr_api.search_people(website, job_titles, exclude_titles)
                 
                 result_row = {"Website": website}
                 
                 if not people:
                     result_row["Status"] = "Nie znaleziono kontaktów"
-                    # Wypełnij puste kolumny
                     for j in range(1, 6):
                         result_row.update({
                             f"Imię i nazwisko osoby {j}": "",
@@ -252,24 +264,20 @@ def main():
                             f"SMTP Valid osoby {j}": ""
                         })
                 else:
-                    # Pobierz szczegółowe dane i filtruj osoby z emailami
                     valid_contacts = []
                     
                     for person in people:
                         details = rr_api.lookup_person_details(person['id'])
-                        time.sleep(1)  # Rate limiting
+                        time.sleep(1)
                         
-                        # Dodaj tylko osoby z emailem i smtp_valid != 'invalid'
                         if details.get('email') and details.get('smtp_valid') != 'invalid':
                             valid_contacts.append(details)
                         
-                        # Przerwij jeśli mamy już 5 kontaktów
                         if len(valid_contacts) >= 5:
                             break
                     
                     if not valid_contacts:
                         result_row["Status"] = "Nie znaleziono kontaktów z prawidłowymi emailami"
-                        # Wypełnij puste kolumny
                         for j in range(1, 6):
                             result_row.update({
                                 f"Imię i nazwisko osoby {j}": "",
@@ -283,7 +291,6 @@ def main():
                     else:
                         result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z prawidłowymi emailami"
                         
-                        # Dodaj dane kontaktów
                         for j, contact in enumerate(valid_contacts[:5], 1):
                             result_row.update({
                                 f"Imię i nazwisko osoby {j}": contact.get('name', ''),
@@ -295,7 +302,6 @@ def main():
                                 f"SMTP Valid osoby {j}": contact.get('smtp_valid', '')
                             })
                         
-                        # Wypełnij pozostałe puste kolumny
                         for j in range(len(valid_contacts) + 1, 6):
                             result_row.update({
                                 f"Imię i nazwisko osoby {j}": "",
@@ -333,14 +339,11 @@ def main():
                                         if "kontakt" in result["Status"] and "Nie znaleziono" not in result["Status"])
                 st.metric("Firmy z kontaktami", firms_with_contacts)
             
-            # Download button dla Excel
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                results_df.to_excel(writer, index=False, sheet_name='Kontakty')
-            
+            # Download button
+            excel_data = create_excel_file(results_df)
             st.download_button(
                 "📥 Pobierz wyniki jako Excel",
-                data=output.getvalue(),
+                data=excel_data,
                 file_name="kontakty_inwestorzy.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
@@ -349,22 +352,6 @@ def main():
         st.warning("⚠️ Wprowadź klucz API RocketReach")
     elif not websites:
         st.info("📝 Wprowadź dane firm do analizy")
-
-    # Informacje o aplikacji
-    with st.expander("ℹ️ Informacje o aplikacji"):
-        st.markdown("""
-        ### Funkcjonalności aplikacji:
-        
-        - **Filtrowanie kontaktów**: Pomijane są osoby bez adresów email lub z nieprawidłowymi emailami
-        - **SMTP Valid**: Wyświetlany jest status walidacji SMTP emaila (valid, invalid, inconclusive)
-        - **Type emaila**: Wyświetlany jest typ emaila (professional, personal)
-        - **Grade emaila**: Wyświetlana jest ocena jakości emaila (A, A-, B, B-, C, D, F)
-        - **Hierarchia emaili**: 
-          1. recommended_professional_email
-          2. current_work_email  
-          3. Najlepszy email zawodowy z listy (z wykluczeniem invalid)
-        - **Export do Excel**: Wyniki są eksportowane do formatu .xlsx
-        """)
 
 if __name__ == "__main__":
     main()
