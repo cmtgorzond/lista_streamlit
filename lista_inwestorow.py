@@ -2,24 +2,20 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
+import re
 from urllib.parse import urlparse
 
 st.title("🎯 RocketReach – Wyszukiwarka kontaktów po stronie internetowej firmy")
 
-# Pomocnicza funkcja do wyodrębnienia domeny z URL
 def extract_domain(url):
     parsed = urlparse(url)
     netloc = parsed.netloc or parsed.path
     return netloc.replace("www.", "").lower().strip("/")
 
-# Wczytywanie pliku CSV
 uploaded_file = st.file_uploader("📁 Wgraj plik CSV (kolumna A = strona firmy):", type=["csv"])
-
-# API Key
 api_key = st.text_input("🔑 Wprowadź swój RocketReach API Key:", type="password")
 
-# Filtry tytułów
-include_keywords_input = st.text_area("📌 Wpisz słowa kluczowe (oddziel przecinkami):", value="AI, Engineer, Intern")
+include_keywords_input = st.text_area("📌 Wpisz słowa kluczowe (oddziel przecinkami):", value="engineer, developer, design, analog, firmware, software, economist, scientist, intern")
 exclude_keywords_input = st.text_area("🚫 Wpisz słowa do wykluczenia (oddziel przecinkami):")
 
 include_keywords = [kw.strip().lower() for kw in include_keywords_input.split(",") if kw.strip()]
@@ -56,7 +52,7 @@ def search_people(domain, api_key, include_keywords, exclude_keywords, max_resul
             break
 
         for profile in profiles:
-            title = (profile.get("current_title") or "").lower()
+            title = (profile.get("current_title") or "").strip().lower()
             status = profile.get("status", "")
             profile_id = profile.get("id")
 
@@ -66,10 +62,12 @@ def search_people(domain, api_key, include_keywords, exclude_keywords, max_resul
                 reasons_skipped.append(f"(ID {profile_id}) brak tytułu")
                 continue
 
-            if not include_keywords:
-                matched = True
-            else:
-                matched = any(kw in title for kw in include_keywords) and not any(ex in title for ex in exclude_keywords)
+            words_in_title = set(re.findall(r'\b\w+\b', title))
+
+            matched = (
+                (not include_keywords or any(kw in words_in_title for kw in include_keywords)) and
+                (not exclude_keywords or not any(ex in words_in_title for ex in exclude_keywords))
+            )
 
             if matched and status in {"complete", "progress"}:
                 people.append(profile_id)
@@ -108,7 +106,6 @@ def lookup_person(person_id, api_key):
     linkedin = data.get("linkedin_url", "")
     return [name, title, email, linkedin]
 
-# Logika główna aplikacji
 if uploaded_file and api_key:
     df = pd.read_csv(uploaded_file)
     output_data = []
@@ -146,7 +143,6 @@ if uploaded_file and api_key:
                 row_data.extend(["", "", "", ""])
             output_data.append(row_data)
 
-    # Kolumny wynikowe
     columns = []
     for i in range(1, 6):
         columns.extend([
