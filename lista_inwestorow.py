@@ -1,17 +1,13 @@
 import streamlit as st
 import requests
 import pandas as pd
-import re
 
-# 🧠 Konfiguracja API
-API_KEY = "TWOJ_KLUCZ_API_TUTAJ"
 API_URL = "https://api.rocketreach.co/v1/api/search/profiles"
 
-# 🔍 Funkcja do pobierania danych
-def search_people(domain, include_keywords, exclude_keywords, max_pages=5):
+def search_people(api_key, domain, include_keywords, exclude_keywords, max_pages=5):
     people = []
     reasons_skipped = []
-    titles_seen = []
+    seen_ids = set()
 
     for kw in include_keywords:
         query = {
@@ -24,7 +20,7 @@ def search_people(domain, include_keywords, exclude_keywords, max_pages=5):
             st.text(f"📡 Zapytanie API (strona {page + 1}): {query}")
             response = requests.post(
                 API_URL,
-                headers={"Authorization": f"Bearer {API_KEY}"},
+                headers={"Authorization": f"Bearer {api_key}"},
                 json=query | {"start": start}
             )
             if response.status_code != 200:
@@ -36,16 +32,16 @@ def search_people(domain, include_keywords, exclude_keywords, max_pages=5):
             start = data.get("pagination", {}).get("next")
 
             for profile in profiles:
+                profile_id = profile.get("id")
                 title = (profile.get("current_title") or "").strip().lower()
                 status = profile.get("status", "")
-                profile_id = profile.get("id")
-                titles_seen.append(title)
 
                 included = not include_keywords or any(inc in title for inc in include_keywords)
-                excluded = any(ex in title for ex in exclude_keywords)
+                excluded = any(exc in title for exc in exclude_keywords)
 
-                if included and not excluded and status in {"complete", "progress"} and profile_id not in people:
+                if included and not excluded and status in {"complete", "progress"} and profile_id not in seen_ids:
                     people.append(profile)
+                    seen_ids.add(profile_id)
                 else:
                     reasons = []
                     if not included:
@@ -59,46 +55,45 @@ def search_people(domain, include_keywords, exclude_keywords, max_pages=5):
             if not start:
                 break
 
-    return people, titles_seen, reasons_skipped
+    return people, reasons_skipped
 
-# 🖥️ UI Streamlit
-st.title("🔎 Wyszukiwarka kontaktów – RocketReach")
+# === UI Streamlit ===
 
-st.markdown("📌 Wpisz słowa kluczowe (oddziel przecinkami):")
-include_input = st.text_input("Słowa do filtrowania stanowisk", "sales, developer")
+st.title("🔍 RocketReach – Wyszukiwarka kontaktów")
 
-st.markdown("🚫 Wpisz słowa do wykluczenia (oddziel przecinkami):")
-exclude_input = st.text_input("Słowa do wykluczenia", "")
-
-domain = st.text_input("🔍 Firma (np. nvidia.com)", "nvidia.com")
-
-max_pages = st.number_input("🔁 Ile stron API chcesz przeszukać (każda zawiera 10 wyników)?", min_value=1, max_value=50, value=5)
+api_key = st.text_input("🔑 Klucz API RocketReach", type="password")
+domain = st.text_input("🌐 Domena firmy (np. nvidia.com)", "nvidia.com")
+include_input = st.text_input("📌 Słowa kluczowe (oddziel przecinkami)", "sales, developer")
+exclude_input = st.text_input("🚫 Wyklucz tytuły zawierające (oddziel przecinkami)", "")
+max_pages = st.number_input("🔁 Liczba stron do przeszukania (po 10 wyników)", min_value=1, max_value=50, value=5)
 
 if st.button("🔎 Szukaj"):
-    with st.spinner("Szukanie kontaktów..."):
-        include_keywords = [kw.strip().lower() for kw in include_input.split(",") if kw.strip()]
-        exclude_keywords = [kw.strip().lower() for kw in exclude_input.split(",") if kw.strip()]
+    if not api_key.strip():
+        st.warning("❗ Podaj klucz API, aby kontynuować.")
+    else:
+        with st.spinner("Szukanie kontaktów..."):
+            include_keywords = [kw.strip().lower() for kw in include_input.split(",") if kw.strip()]
+            exclude_keywords = [kw.strip().lower() for kw in exclude_input.split(",") if kw.strip()]
 
-        results, titles, skipped = search_people(domain, include_keywords, exclude_keywords, max_pages)
+            results, skipped = search_people(api_key, domain, include_keywords, exclude_keywords, max_pages)
 
-        if results:
-            df = pd.DataFrame([{
-                "Imię i nazwisko": r.get("name"),
-                "Stanowisko": r.get("current_title"),
-                "LinkedIn": r.get("linkedin_url"),
-                "Lokalizacja": r.get("location"),
-                "Email firmowy": next((e for e in r.get("teaser", {}).get("professional_emails", [])), ""),
-                "Email prywatny": next((e for e in r.get("teaser", {}).get("personal_emails", [])), ""),
-                "Telefon": next((p.get("number") for p in r.get("teaser", {}).get("phones", [])), "")
-            } for r in results])
+            if results:
+                df = pd.DataFrame([{
+                    "Imię i nazwisko": r.get("name"),
+                    "Stanowisko": r.get("current_title"),
+                    "LinkedIn": r.get("linkedin_url"),
+                    "Lokalizacja": r.get("location"),
+                    "Email firmowy": next((e for e in r.get("teaser", {}).get("professional_emails", [])), ""),
+                    "Email prywatny": next((e for e in r.get("teaser", {}).get("personal_emails", [])), ""),
+                    "Telefon": next((p.get("number") for p in r.get("teaser", {}).get("phones", [])), "")
+                } for r in results])
 
-            st.success(f"🎯 Znaleziono {len(df)} kontaktów!")
-            st.dataframe(df)
-            st.download_button("💾 Pobierz jako CSV", df.to_csv(index=False).encode("utf-8"), "kontakty.csv", "text/csv")
+                st.success(f"✅ Znaleziono {len(df)} kontaktów.")
+                st.dataframe(df)
+                st.download_button("💾 Pobierz jako CSV", df.to_csv(index=False).encode("utf-8"), "kontakty.csv", "text/csv")
+            else:
+                st.warning("⚠️ Nie znaleziono kontaktów spełniających kryteria.")
 
-        else:
-            st.warning("⚠️ Nie znaleziono kontaktów (pasujących do filtrów)")
-
-        if skipped:
-            with st.expander("🔎 Pomińnięte profile – szczegóły"):
-                st.text("\n".join(skipped))
+            if skipped:
+                with st.expander("📋 Pomińnięte rekordy"):
+                    st.text("\n".join(skipped))
