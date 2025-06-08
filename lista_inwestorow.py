@@ -1,146 +1,153 @@
 import streamlit as st
-import requests
 import pandas as pd
-import re
+import requests
 import time
+import re
 from typing import List, Dict, Optional
 
-class RocketReachClient:
+class RocketReachAPI:
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self.base_url = "https://api.rocketreach.co/api/v2"
+        self.base_url = "https://api.rocketreach.co"
         self.headers = {
-            "Api-Key": self.api_key,
+            "Api-Key": api_key,
             "Content-Type": "application/json",
-            "Accept": "application/json"
+            "accept": "application/json"
         }
-        self.rate_limit_delay = 1.5
 
-    def search_people(self, domain: str, titles: List[str]) -> Optional[Dict]:
-        """Wyszukuje profile osób zgodnie z dokumentacją Search API"""
-        cleaned_domain = self._clean_domain(domain)
-        payload = {
-            "query": {
-                "company_domain": cleaned_domain,
-                "current_title": titles
-            },
-            "start": 1,
-            "page_size": 5
-        }
-        
+    def search_people_by_domain(self, domain: str, job_titles: List[str], exclude_titles: List[str] = None) -> List[Dict]:
         try:
-            response = requests.post(
-                f"{self.base_url}/person/search",
-                headers=self.headers,
-                json=payload,
-                timeout=10
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.HTTPError as errh:
-            st.error(f"Błąd Search API: {errh}")
-            return None
+            all_results = []
+            
+            for title in job_titles:
+                search_params = {
+                    "query": {
+                        "current_title": [title],
+                        "current_employer_domain": [domain]
+                    },
+                    "start": 1,
+                    "page_size": 5
+                }
+                
+                response = requests.post(
+                    f"{self.base_url}/api/v2/person/search",
+                    headers=self.headers,
+                    json=search_params
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'profiles' in data:
+                        for person in data['profiles']:
+                            if exclude_titles and any(excl.lower() in person.get('current_title', '').lower() for excl in exclude_titles):
+                                continue
+                            all_results.append(person)
+                time.sleep(0.5)
+            
+            return all_results[:5]
+        
+        except Exception as e:
+            st.error(f"Błąd podczas wyszukiwania osób: {str(e)}")
+            return []
 
-    def lookup_person(self, profile_id: int) -> Optional[Dict]:
-        """Pobiera szczegóły kontaktu zgodnie z dokumentacją Lookup API"""
+    def lookup_person_by_id(self, person_id: int) -> Dict:
         try:
             response = requests.get(
-                f"{self.base_url}/person/lookup?id={profile_id}",
+                f"{self.base_url}/api/v2/person/lookup",
                 headers=self.headers,
-                timeout=10
+                params={"id": person_id, "lookup_type": "standard"}
             )
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.HTTPError as errh:
-            st.error(f"Błąd Lookup API: {errh}")
-            return None
+            
+            if response.status_code == 200:
+                return response.json()
+            return {}
+        
+        except Exception as e:
+            st.error(f"Błąd podczas pobierania szczegółów osoby: {str(e)}")
+            return {}
 
-    @staticmethod
-    def _clean_domain(url: str) -> str:
-        """Czyści format domeny do wymagań API"""
-        return re.sub(r"https?://(www\.)?", "", url).split('/')[0].strip().lower()
+def extract_domain(url: str) -> str:
+    url = url.strip()
+    if not url.startswith(('http://', 'https://')):
+        url = f'https://{url}'
+    
+    match = re.search(r'https?://(?:www\.)?([^/]+)', url)
+    if match:
+        domain = match.group(1).lower()
+        return domain.split('/')[0]  # Usuń ścieżki po domenie
+    return url
 
 def main():
-    st.set_page_config(page_title="🏢 Zaawansowana Wyszukiwarka Kontaktów", layout="wide")
-    st.title("🔍 Wyszukiwarka Kontaktów B2B")
+    st.set_page_config(page_title="🚀 RocketReach Contact Finder", layout="wide")
+    st.title("🚀 RocketReach Contact Finder")
     
     with st.sidebar:
-        api_key = st.text_input("🔑 Klucz API RocketReach", type="password")
-        st.markdown("---")
-        titles = st.text_input("Stanowiska (oddziel przecinkami)", value="M&A,Corporate Development,Strategy")
-    
-    if not api_key:
-        st.warning("⚠️ Wprowadź klucz API w panelu bocznym")
-        return
+        st.header("⚙️ Konfiguracja")
+        api_key = st.text_input("RocketReach API Key", type="password")
         
-    client = RocketReachClient(api_key)
-    
-    domain = st.text_input("🌐 Wprowadź domenę firmy", value="nvidia.com")
-    
-    if st.button("🔍 Wyszukaj kontakty"):
-        title_list = [t.strip() for t in titles.split(",") if t.strip()]
+        st.subheader("Stanowiska do wyszukiwania")
+        job_titles_input = st.text_area(
+            "Nazwy stanowisk (po jednej w linii)",
+            value="\n".join(["M&A", "M and A", "corporate development", "strategy", "strategic", "growth", "merger"]),
+            height=150
+        )
+        job_titles = [t.strip() for t in job_titles_input.split('\n') if t.strip()]
         
-        if not title_list:
-            st.error("Musisz podać przynajmniej jedno stanowisko")
-            return
+        st.subheader("Stanowiska do wykluczenia")
+        exclude_titles = [t.strip() for t in st.text_area(
+            "Nazwy stanowisk do wykluczenia (po jednej w linii)",
+            height=100
+        ).split('\n') if t.strip()]
+
+    st.header("📁 Upload pliku CSV")
+    uploaded_file = st.file_uploader("Wybierz plik CSV ze stronami internetowymi firm", type=['csv'])
+    
+    if uploaded_file and api_key:
+        try:
+            df = pd.read_csv(uploaded_file)
+            websites = df.iloc[:, 0].dropna().tolist()
             
-        start_time = time.time()
-        
-        # Etap 1: Wyszukiwanie profili
-        search_results = client.search_people(domain, title_list)
-        
-        if not search_results or 'profiles' not in search_results:
-            st.error("Nie znaleziono profilów")
-            return
-            
-        profiles = search_results['profiles']
-        st.success(f"Znaleziono {len(profiles)} profili, rozpoczynam pobieranie kontaktów...")
-        
-        # Etap 2: Pobieranie szczegółów kontaktowych
-        results = []
-        progress_bar = st.progress(0)
-        
-        for idx, profile in enumerate(profiles):
-            profile_id = profile.get('id')
-            if not profile_id:
-                continue
+            if st.button("🚀 Rozpocznij wyszukiwanie", type="primary"):
+                rr_api = RocketReachAPI(api_key)
+                results = []
+                progress_bar = st.progress(0)
                 
-            # Pobieranie danych kontaktowych
-            lookup_data = client.lookup_person(profile_id)
-            if lookup_data and 'person' in lookup_data:
-                person = lookup_data['person']
-                emails = [e['email'] for e in person.get('emails', []) if e.get('type') == 'work']
-                results.append({
-                    "Imię i nazwisko": f"{person.get('first_name', '')} {person.get('last_name', '')}".strip(),
-                    "Stanowisko": person.get('current_title', ''),
-                    "Email": emails[0] if emails else ''
-                })
-            
-            progress_bar.progress((idx + 1) / len(profiles))
-            time.sleep(client.rate_limit_delay)
+                for i, website in enumerate(websites):
+                    domain = extract_domain(website)
+                    people = rr_api.search_people_by_domain(domain, job_titles, exclude_titles)
+                    
+                    result_row = {"Website": website}
+                    if not people:
+                        result_row["Status"] = "Nie znaleziono kontaktów"
+                        for j in range(1, 6):
+                            result_row.update({f"Osoba {j}": "", f"Email {j}": "", f"LinkedIn {j}": ""})
+                    else:
+                        result_row["Status"] = f"Znaleziono {len(people)} kontaktów"
+                        for j, person in enumerate(people[:5], 1):
+                            details = rr_api.lookup_person_by_id(person['id'])
+                            email = details.get('recommended_professional_email') or \
+                                    details.get('current_work_email') or \
+                                    next((e['email'] for e in details.get('emails', []) if e['type'] == 'professional'), '')
+                            
+                            result_row.update({
+                                f"Osoba {j}": details.get('name', ''),
+                                f"Stanowisko {j}": details.get('current_title', ''),
+                                f"Email {j}": email,
+                                f"LinkedIn {j}": details.get('linkedin_url', '')
+                            })
+                            time.sleep(1)
+                    
+                    results.append(result_row)
+                    progress_bar.progress((i + 1) / len(websites))
+                
+                results_df = pd.DataFrame(results)
+                st.dataframe(results_df)
+                
+                csv = results_df.to_csv(index=False)
+                st.download_button("📥 Pobierz wyniki", csv, "rocketreach_results.csv")
         
-        progress_bar.empty()
-        
-        # Formatowanie wyników
-        if results:
-            df = pd.DataFrame(results)
-            st.dataframe(
-                df,
-                use_container_width=True,
-                column_config={
-                    "Email": st.column_config.TextColumn("Email", help="Zweryfikowany email służbowy")
-                }
-            )
-            
-            csv = df.to_csv(index=False, sep=';', encoding='utf-8-sig')
-            st.download_button(
-                label="💾 Pobierz wyniki jako CSV",
-                data=csv,
-                file_name=f"kontakty_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv"
-            )
-        else:
-            st.error("Nie znaleziono kontaktów z adresami email")
+        except Exception as e:
+            st.error(f"Błąd: {str(e)}")
 
 if __name__ == "__main__":
     main()
