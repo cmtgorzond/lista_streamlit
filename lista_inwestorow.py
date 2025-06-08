@@ -328,7 +328,7 @@ def main():
     else:
         st.subheader("🌐 Wprowadź domenę ręcznie")
         manual_domain = st.text_input(
-            "Wpisz domenę firmy (np. https://www.nvidia.com/)",
+            "Wpisz domenę firmy (np. https://cmt-advisory.pl/)",
             placeholder="https://www.example.com"
         )
         
