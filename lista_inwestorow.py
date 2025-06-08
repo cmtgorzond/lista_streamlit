@@ -187,7 +187,7 @@ def main():
         st.subheader("Stanowiska do wyszukiwania")
         job_titles_input = st.text_area(
             "Nazwy stanowisk (po jednej w linii)",
-            "sales\nM&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger",
+            "M&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger\nacquisition",
             height=150
         )
         job_titles = [title.strip() for title in job_titles_input.split('\n') if title.strip()]
@@ -195,6 +195,7 @@ def main():
         st.subheader("Stanowiska do wykluczenia")
         exclude_titles_input = st.text_area(
             "Nazwy stanowisk do wykluczenia (po jednej w linii)",
+            "hr\nhuman resources\nmarketing\nsales\ntalent",
             height=100
         )
         exclude_titles = [title.strip() for title in exclude_titles_input.split('\n') if title.strip()]
@@ -352,6 +353,22 @@ def main():
         st.warning("⚠️ Wprowadź klucz API RocketReach")
     elif not websites:
         st.info("📝 Wprowadź dane firm do analizy")
+
+    # Informacje o aplikacji
+    with st.expander("ℹ️ Informacje o aplikacji"):
+        st.markdown("""
+        ### Funkcjonalności aplikacji:
+        
+        - **Filtrowanie kontaktów**: Pomijane są osoby bez adresów email lub z nieprawidłowymi emailami
+        - **SMTP Valid**: Wyświetlany jest status walidacji SMTP emaila (valid, invalid, inconclusive)
+        - **Type emaila**: Wyświetlany jest typ emaila (professional, personal)
+        - **Grade emaila**: Wyświetlana jest ocena jakości emaila (A, A-, B, B-, C, D, F)
+        - **Hierarchia emaili**: 
+          1. recommended_professional_email
+          2. current_work_email  
+          3. Najlepszy email zawodowy z listy (z wykluczeniem invalid)
+        - **Export do Excel**: Wyniki są eksportowane do formatu .xlsx
+        """)
 
 if __name__ == "__main__":
     main()
