@@ -1,102 +1,91 @@
 import streamlit as st
 import pandas as pd
 import requests
-import time
 import re
-from typing import List, Dict
-
-class RocketReachAPI:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.base_url = "https://api.rocketreach.co"
-        self.headers = {
-            "Api-Key": api_key,
-            "Content-Type": "application/json",
-            "accept": "application/json"
-        }
-
-    def search_people(self, domain: str, job_titles: List[str], exclude_titles: List[str]) -> List[Dict]:
-        try:
-            all_results = []
-            
-            for title in job_titles:
-                search_params = {
-                    "query": {
-                        "current_title": [f'"{title}"'],
-                        "current_employer_domain": [domain]
-                    },
-                    "start": 1,
-                    "page_size": 5
-                }
-                
-                response = requests.post(
-                    f"{self.base_url}/api/v2/person/search",
-                    headers=self.headers,
-                    json=search_params
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if 'profiles' in data:
-                        for person in data['profiles']:
-                            current_title = person.get('current_title', '').lower()
-                            if any(excl.lower() in current_title for excl in exclude_titles):
-                                continue
-                            all_results.append(person)
-                time.sleep(1)
-            
-            return all_results
-
-        except Exception as e:
-            st.error(f"Błąd wyszukiwania: {str(e)}")
-            return []
-
-    def lookup_person(self, person_id: int) -> Dict:
-        try:
-            response = requests.get(
-                f"{self.base_url}/api/v2/person/lookup",
-                headers=self.headers,
-                params={"id": person_id, "lookup_type": "standard"}
-            )
-            return response.json() if response.status_code == 200 else {}
-        except Exception as e:
-            st.error(f"Błąd pobierania danych: {str(e)}")
-            return {}
+from typing import List
 
 def extract_domain(url: str) -> str:
+    """Wyodrębnia czystą domenę z URL"""
     url = url.strip().lower()
     if not url.startswith(('http://', 'https://')):
-        url = f'https://{url}'
+        url = f'http://{url}'
     
-    match = re.match(
-        r'^(?:https?://)?(?:www\.)?([^/.:]+)\.([a-z]{2,})(?:/|$)', 
-        url,
-        re.IGNORECASE
+    # Usuń ścieżki, parametry i subdomenę 'www'
+    domain = re.search(
+        r'(?:https?://)?(?:www\.)?([^/.:]+?\.[a-z]{2,})(?:/|:|$)',
+        url
     )
-    return f"{match.group(1)}.{match.group(2)}" if match else url
+    return domain.group(1) if domain else url
+
+def search_people(api_key: str, domain: str, titles: List[str], exclude_titles: List[str]) -> List[dict]:
+    """Wyszukuje osoby wg domeny i stanowisk"""
+    headers = {
+        "Api-Key": api_key,
+        "Content-Type": "application/json",
+        "accept": "application/json"
+    }
+    
+    all_results = []
+    
+    for title in titles:
+        try:
+            payload = {
+                "query": {
+                    "current_title": [f'"{title}"'],  # Dokładne dopasowanie frazy
+                    "current_employer_domain": [domain]
+                },
+                "start": 1,
+                "page_size": 5  # Maksymalna liczba wyników na stanowisko
+            }
+            
+            response = requests.post(
+                "https://api.rocketreach.co/api/v2/person/search",
+                headers=headers,
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                for person in data.get('profiles', []):
+                    # Filtruj wykluczone stanowiska
+                    if any(excl.lower() in person.get('current_title', '').lower() for excl in exclude_titles):
+                        continue
+                    all_results.append({
+                        "name": person.get('name'),
+                        "title": person.get('current_title'),
+                        "company": person.get('current_employer'),
+                        "linkedin": person.get('linkedin_url'),
+                        "id": person.get('id')
+                    })
+        except Exception as e:
+            st.error(f"Błąd dla stanowiska {title}: {str(e)}")
+    
+    return all_results[:5]  # Ogranicz do 5 wyników
 
 def main():
-    st.set_page_config(page_title="🚀 RocketReach Contact Finder Pro", layout="wide")
-    st.title("🚀 RocketReach Contact Finder Pro")
+    st.set_page_config(page_title="🔍 RocketReach Searcher", layout="wide")
+    st.title("🔍 Wyszukiwarka kontaktów - People Search API")
     
+    # Panel boczny
     with st.sidebar:
         st.header("⚙️ Konfiguracja")
-        api_key = st.text_input("API Key RocketReach", type="password")
+        api_key = st.text_input("Wprowadź API Key", type="password")
         
         st.subheader("Filtry stanowisk")
-        job_titles = st.text_area(
-            "Szukane stanowiska (po jednej w linii)",
-            value="sales\nM&A\ncorporate development",
+        titles = st.text_area(
+            "Szukane stanowiska (jedno w linii)",
+            "M&A\nM and A\ncorporate development\nstrategy\ngrowth",
             height=150
         ).split('\n')
         
         exclude_titles = st.text_area(
-            "Wykluczane stanowiska (po jednej w linii)",
+            "Wykluczane stanowiska (jedno w linii)",
             height=100
         ).split('\n')
-
+    
+    # Główny panel
     st.header("📁 Prześlij plik CSV")
-    uploaded_file = st.file_uploader("Wybierz plik z listą stron firmowych", type=['csv'])
+    uploaded_file = st.file_uploader("Wybierz plik z listą URL firm", type=['csv'])
     
     if uploaded_file and api_key:
         try:
@@ -104,55 +93,40 @@ def main():
             websites = df.iloc[:, 0].dropna().tolist()
             
             if st.button("🔍 Rozpocznij wyszukiwanie", type="primary"):
-                rr_api = RocketReachAPI(api_key)
                 results = []
-                progress = st.progress(0)
                 
-                for idx, website in enumerate(websites):
+                for website in websites:
                     domain = extract_domain(website)
-                    people = rr_api.search_people(domain, job_titles, exclude_titles)
+                    people = search_people(api_key, domain, titles, exclude_titles)
                     
-                    result_row = {"Strona": website}
-                    if people:
-                        result_row["Status"] = f"Znaleziono {len(people)} kontaktów"
-                        for i, person in enumerate(people[:5], 1):
-                            details = rr_api.lookup_person(person['id'])
-                            email = next(
-                                (e['email'] for e in details.get('emails', []) 
-                                if e.get('type') == 'professional' and e.get('smtp_valid') == 'valid'),
-                                ''
-                            )
-                            result_row.update({
-                                f"Osoba {i}": details.get('name'),
-                                f"Stanowisko {i}": details.get('current_title'),
-                                f"Email {i}": email,
-                                f"LinkedIn {i}": details.get('linkedin_url')
-                            })
-                            time.sleep(1.5)
-                    else:
-                        result_row.update({
+                    if not people:
+                        results.append({
+                            "Strona": website,
                             "Status": "Nie znaleziono",
-                            **{f"Osoba {i}": "" for i in range(1,6)},
-                            **{f"Email {i}": "" for i in range(1,6)},
-                            **{f"LinkedIn {i}": "" for i in range(1,6)}
+                            "Liczba wyników": 0
                         })
-                    
-                    results.append(result_row)
-                    progress.progress((idx + 1) / len(websites))
+                    else:
+                        results.append({
+                            "Strona": website,
+                            "Status": "Znaleziono",
+                            "Liczba wyników": len(people),
+                            **{f"Osoba {i+1}": f"{p['name']} ({p['title']})" for i, p in enumerate(people)}
+                        })
                 
                 results_df = pd.DataFrame(results)
                 st.dataframe(results_df)
                 
+                # Eksport wyników
                 csv = results_df.to_csv(index=False, sep=';', encoding='utf-8-sig')
                 st.download_button(
                     "💾 Pobierz wyniki",
                     csv,
-                    "rocketreach_wyniki.csv",
+                    "people_search_results.csv",
                     "text/csv"
                 )
-
+        
         except Exception as e:
-            st.error(f"Krytyczny błąd: {str(e)}")
+            st.error(f"Błąd przetwarzania pliku: {str(e)}")
 
 if __name__ == "__main__":
     main()
