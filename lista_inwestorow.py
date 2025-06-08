@@ -2,9 +2,22 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
+import os
 from typing import List, Dict
 
-# Sprawdź czy openpyxl jest zainstalowane, jeśli nie - zainstaluj
+# Sprawdź czy python-dotenv jest zainstalowane
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    st.warning("Biblioteka python-dotenv nie jest zainstalowana. Instaluję...")
+    import subprocess
+    import sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-dotenv"])
+    from dotenv import load_dotenv
+    load_dotenv()
+
+# Sprawdź czy openpyxl jest zainstalowane
 try:
     import openpyxl
 except ImportError:
@@ -13,9 +26,26 @@ except ImportError:
     import sys
     subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
     import openpyxl
-    st.success("Biblioteka openpyxl została zainstalowana!")
 
 import io
+
+def get_api_key():
+    """Pobiera klucz API z różnych źródeł w kolejności priorytetów"""
+    
+    # 1. Streamlit secrets (najwyższy priorytet dla wdrożeń w chmurze)
+    try:
+        if hasattr(st, 'secrets') and 'api_keys' in st.secrets and 'rocketreach' in st.secrets.api_keys:
+            return st.secrets.api_keys.rocketreach
+    except:
+        pass
+    
+    # 2. Zmienna środowiskowa
+    api_key = os.getenv('ROCKETREACH_API_KEY')
+    if api_key:
+        return api_key
+    
+    # 3. Jeśli nic nie znaleziono, zwróć None
+    return None
 
 class RocketReachAPI:
     def __init__(self, api_key: str):
@@ -32,7 +62,6 @@ class RocketReachAPI:
         try:
             all_results = []
             
-            # Upewnij się, że URL ma protokół
             if not company_url.startswith(('http://', 'https://')):
                 company_url = f'https://{company_url}'
             
@@ -100,7 +129,6 @@ class RocketReachAPI:
                 email_grade = ""
                 smtp_valid = ""
                 
-                # Pierwsza opcja: recommended_professional_email
                 if data.get('recommended_professional_email'):
                     professional_email = data.get('recommended_professional_email')
                     for email_obj in data.get('emails', []):
@@ -110,7 +138,6 @@ class RocketReachAPI:
                             smtp_valid = email_obj.get('smtp_valid', '')
                             break
                 
-                # Druga opcja: current_work_email
                 elif data.get('current_work_email'):
                     professional_email = data.get('current_work_email')
                     for email_obj in data.get('emails', []):
@@ -120,7 +147,6 @@ class RocketReachAPI:
                             smtp_valid = email_obj.get('smtp_valid', '')
                             break
                 
-                # Trzecia opcja: najlepszy email zawodowy z listy
                 elif 'emails' in data:
                     valid_professional_emails = [
                         email_obj for email_obj in data['emails']
@@ -140,7 +166,6 @@ class RocketReachAPI:
                         email_grade = best_email.get('grade', '')
                         smtp_valid = best_email.get('smtp_valid', '')
                 
-                # Sprawdź czy email ma smtp_valid = 'invalid'
                 if smtp_valid == 'invalid':
                     return {}
                 
@@ -171,7 +196,6 @@ def create_excel_file(results_df: pd.DataFrame) -> bytes:
         return output.getvalue()
     except Exception as e:
         st.error(f"Błąd tworzenia pliku Excel: {str(e)}")
-        # Fallback do CSV jeśli Excel nie działa
         return results_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
 def main():
@@ -179,10 +203,32 @@ def main():
     st.title("🎯 Wyszukiwanie kontaktów do inwestorów")
     st.markdown("Aplikacja do wyszukiwania kontaktów w firmach z zaawansowanymi filtrami")
     
+    # Pobierz klucz API
+    api_key = get_api_key()
+    
     # Sidebar
     with st.sidebar:
         st.header("⚙️ Konfiguracja")
-        api_key = st.text_input("RocketReach API Key", type="password")
+        
+        # Wyświetl status klucza API
+        if api_key:
+            st.success("✅ Klucz API został automatycznie załadowany")
+            # Opcjonalnie pozwól na nadpisanie
+            manual_api_key = st.text_input(
+                "Nadpisz klucz API (opcjonalnie)", 
+                type="password",
+                help="Pozostaw puste aby użyć automatycznie załadowanego klucza"
+            )
+            if manual_api_key.strip():
+                api_key = manual_api_key.strip()
+                st.info("🔄 Używam ręcznie wprowadzonego klucza")
+        else:
+            st.warning("⚠️ Nie znaleziono automatycznego klucza API")
+            api_key = st.text_input(
+                "Wprowadź klucz API RocketReach", 
+                type="password",
+                help="Klucz API nie został znaleziony w zmiennych środowiskowych ani secrets"
+            )
         
         st.subheader("Stanowiska do wyszukiwania")
         job_titles_input = st.text_area(
@@ -226,7 +272,7 @@ def main():
             except Exception as e:
                 st.error(f"Błąd wczytywania pliku: {str(e)}")
     
-    else:  # Ręczne wpisanie domeny
+    else:
         st.subheader("🌐 Wprowadź domenę ręcznie")
         manual_domain = st.text_input(
             "Wpisz domenę firmy (np. https://www.nvidia.com/)",
@@ -350,24 +396,27 @@ def main():
             )
     
     elif not api_key:
-        st.warning("⚠️ Wprowadź klucz API RocketReach")
+        st.error("❌ Brak klucza API - skonfiguruj go w pliku .env lub wprowadź ręcznie")
     elif not websites:
         st.info("📝 Wprowadź dane firm do analizy")
 
     # Informacje o aplikacji
-    with st.expander("ℹ️ Informacje o aplikacji"):
+    with st.expander("ℹ️ Konfiguracja klucza API"):
         st.markdown("""
-        ### Funkcjonalności aplikacji:
+        ### Sposoby konfiguracji klucza API:
         
-        - **Filtrowanie kontaktów**: Pomijane są osoby bez adresów email lub z nieprawidłowymi emailami
-        - **SMTP Valid**: Wyświetlany jest status walidacji SMTP emaila (valid, invalid, inconclusive)
-        - **Type emaila**: Wyświetlany jest typ emaila (professional, personal)
-        - **Grade emaila**: Wyświetlana jest ocena jakości emaila (A, A-, B, B-, C, D, F)
-        - **Hierarchia emaili**: 
-          1. recommended_professional_email
-          2. current_work_email  
-          3. Najlepszy email zawodowy z listy (z wykluczeniem invalid)
-        - **Export do Excel**: Wyniki są eksportowane do formatu .xlsx
+        **Metoda 1: Plik .env (zalecana dla rozwoju)**
+        1. Stwórz plik `.env` w głównym folderze projektu
+        2. Dodaj linię: `ROCKETREACH_API_KEY=twój_klucz_api`
+        3. Dodaj `.env` do pliku `.gitignore`
+        
+        **Metoda 2: Streamlit Secrets (zalecana dla wdrożenia)**
+        1. Stwórz folder `.streamlit`
+        2. Stwórz plik `.streamlit/secrets.toml`
+        3. Dodaj: `[api_keys]` i `rocketreach = "twój_klucz_api"`
+        
+        **Metoda 3: Ręczne wprowadzenie**
+        - Wprowadź klucz w polu powyżej (nie jest bezpieczne dla produkcji)
         """)
 
 if __name__ == "__main__":
