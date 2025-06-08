@@ -89,24 +89,24 @@ class RocketReachAPI:
                 # 3. Najlepszy email zawodowy z listy emails
                 
                 professional_email = ""
-                email_grade = ""
+                email_type = ""
                 
                 # Pierwsza opcja: recommended_professional_email
                 if data.get('recommended_professional_email'):
                     professional_email = data.get('recommended_professional_email')
-                    # Znajdź grade dla tego emaila
+                    # Znajdź type dla tego emaila
                     for email_obj in data.get('emails', []):
                         if email_obj.get('email') == professional_email:
-                            email_grade = email_obj.get('grade', '')
+                            email_type = email_obj.get('type', '')
                             break
                 
                 # Druga opcja: current_work_email
                 elif data.get('current_work_email'):
                     professional_email = data.get('current_work_email')
-                    # Znajdź grade dla tego emaila
+                    # Znajdź type dla tego emaila
                     for email_obj in data.get('emails', []):
                         if email_obj.get('email') == professional_email:
-                            email_grade = email_obj.get('grade', '')
+                            email_type = email_obj.get('type', '')
                             break
                 
                 # Trzecia opcja: najlepszy email zawodowy z listy
@@ -127,13 +127,13 @@ class RocketReachAPI:
                         
                         best_email = professional_emails[0]
                         professional_email = best_email.get('email', '')
-                        email_grade = best_email.get('grade', '')
+                        email_type = best_email.get('type', '')
                 
                 return {
                     "name": data.get('name', ''),
                     "title": data.get('current_title', ''),
                     "email": professional_email,
-                    "email_grade": email_grade,
+                    "email_type": email_type,
                     "linkedin": data.get('linkedin_url', ''),
                     "company": data.get('current_employer', '')
                 }
@@ -146,8 +146,8 @@ class RocketReachAPI:
             return {}
 
 def main():
-    st.set_page_config(page_title="🚀 RocketReach Contact Finder Pro", layout="wide")
-    st.title("🚀 RocketReach Contact Finder Pro")
+    st.set_page_config(page_title="🎯 Wyszukiwanie kontaktów do inwestorów", layout="wide")
+    st.title("🎯 Wyszukiwanie kontaktów do inwestorów")
     st.markdown("Aplikacja do wyszukiwania kontaktów w firmach z zaawansowanymi filtrami")
     
     # Sidebar
@@ -231,8 +231,8 @@ def main():
                             f"Imię i nazwisko osoby {j}": "",
                             f"Stanowisko osoby {j}": "",
                             f"Email osoby {j}": "",
-                            f"Grade emaila osoby {j}": "",
-                            f"LinkedIn URL osoby {j}": ""
+                            f"LinkedIn URL osoby {j}": "",
+                            f"Type emaila osoby {j}": ""
                         })
                 else:
                     # Pobierz szczegółowe dane i filtruj osoby z emailami
@@ -258,8 +258,8 @@ def main():
                                 f"Imię i nazwisko osoby {j}": "",
                                 f"Stanowisko osoby {j}": "",
                                 f"Email osoby {j}": "",
-                                f"Grade emaila osoby {j}": "",
-                                f"LinkedIn URL osoby {j}": ""
+                                f"LinkedIn URL osoby {j}": "",
+                                f"Type emaila osoby {j}": ""
                             })
                     else:
                         result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z emailami"
@@ -270,8 +270,8 @@ def main():
                                 f"Imię i nazwisko osoby {j}": contact.get('name', ''),
                                 f"Stanowisko osoby {j}": contact.get('title', ''),
                                 f"Email osoby {j}": contact.get('email', ''),
-                                f"Grade emaila osoby {j}": contact.get('email_grade', ''),
-                                f"LinkedIn URL osoby {j}": contact.get('linkedin', '')
+                                f"LinkedIn URL osoby {j}": contact.get('linkedin', ''),
+                                f"Type emaila osoby {j}": contact.get('email_type', '')
                             })
                         
                         # Wypełnij pozostałe puste kolumny
@@ -280,8 +280,8 @@ def main():
                                 f"Imię i nazwisko osoby {j}": "",
                                 f"Stanowisko osoby {j}": "",
                                 f"Email osoby {j}": "",
-                                f"Grade emaila osoby {j}": "",
-                                f"LinkedIn URL osoby {j}": ""
+                                f"LinkedIn URL osoby {j}": "",
+                                f"Type emaila osoby {j}": ""
                             })
                 
                 results.append(result_row)
@@ -315,7 +315,7 @@ def main():
             st.download_button(
                 "📥 Pobierz wyniki jako CSV",
                 data=csv,
-                file_name="rocketreach_results.csv",
+                file_name="kontakty_inwestorzy.csv",
                 mime="text/csv"
             )
     
@@ -327,10 +327,10 @@ def main():
     # Informacje o aplikacji
     with st.expander("ℹ️ Informacje o aplikacji"):
         st.markdown("""
-        ### Nowe funkcjonalności:
+        ### Funkcjonalności aplikacji:
         
         - **Filtrowanie kontaktów**: Pomijane są osoby bez adresów email
-        - **Grade emaila**: Wyświetlana jest ocena jakości emaila (A, A-, B, B-, C, D, F)
+        - **Type emaila**: Wyświetlany jest typ emaila (professional, personal)
         - **Hierarchia emaili**: 
           1. recommended_professional_email
           2. current_work_email  
