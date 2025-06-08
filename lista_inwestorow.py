@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import time
 from typing import List, Dict
+import io
 
 class RocketReachAPI:
     def __init__(self, api_key: str):
@@ -90,50 +91,64 @@ class RocketReachAPI:
                 
                 professional_email = ""
                 email_type = ""
+                email_grade = ""
+                smtp_valid = ""
                 
                 # Pierwsza opcja: recommended_professional_email
                 if data.get('recommended_professional_email'):
                     professional_email = data.get('recommended_professional_email')
-                    # Znajdź type dla tego emaila
+                    # Znajdź szczegóły dla tego emaila
                     for email_obj in data.get('emails', []):
                         if email_obj.get('email') == professional_email:
                             email_type = email_obj.get('type', '')
+                            email_grade = email_obj.get('grade', '')
+                            smtp_valid = email_obj.get('smtp_valid', '')
                             break
                 
                 # Druga opcja: current_work_email
                 elif data.get('current_work_email'):
                     professional_email = data.get('current_work_email')
-                    # Znajdź type dla tego emaila
+                    # Znajdź szczegóły dla tego emaila
                     for email_obj in data.get('emails', []):
                         if email_obj.get('email') == professional_email:
                             email_type = email_obj.get('type', '')
+                            email_grade = email_obj.get('grade', '')
+                            smtp_valid = email_obj.get('smtp_valid', '')
                             break
                 
                 # Trzecia opcja: najlepszy email zawodowy z listy
                 elif 'emails' in data:
-                    # Sortuj emaile zawodowe według grade (A > A- > B > B- > C > D > F)
-                    grade_order = {'A': 1, 'A-': 2, 'B': 3, 'B-': 4, 'C': 5, 'D': 6, 'F': 7}
-                    
-                    professional_emails = [
+                    # Filtruj tylko emaile z smtp_valid != 'invalid'
+                    valid_professional_emails = [
                         email_obj for email_obj in data['emails']
-                        if email_obj.get('type') == 'professional'
+                        if (email_obj.get('type') == 'professional' and 
+                            email_obj.get('smtp_valid') != 'invalid')
                     ]
                     
-                    if professional_emails:
-                        # Sortuj według grade
-                        professional_emails.sort(
+                    if valid_professional_emails:
+                        # Sortuj według grade (A > A- > B > B- > C > D > F)
+                        grade_order = {'A': 1, 'A-': 2, 'B': 3, 'B-': 4, 'C': 5, 'D': 6, 'F': 7}
+                        valid_professional_emails.sort(
                             key=lambda x: grade_order.get(x.get('grade', 'F'), 8)
                         )
                         
-                        best_email = professional_emails[0]
+                        best_email = valid_professional_emails[0]
                         professional_email = best_email.get('email', '')
                         email_type = best_email.get('type', '')
+                        email_grade = best_email.get('grade', '')
+                        smtp_valid = best_email.get('smtp_valid', '')
+                
+                # Sprawdź czy email ma smtp_valid = 'invalid' - jeśli tak, zwróć pusty wynik
+                if smtp_valid == 'invalid':
+                    return {}
                 
                 return {
                     "name": data.get('name', ''),
                     "title": data.get('current_title', ''),
                     "email": professional_email,
                     "email_type": email_type,
+                    "email_grade": email_grade,
+                    "smtp_valid": smtp_valid,
                     "linkedin": data.get('linkedin_url', ''),
                     "company": data.get('current_employer', '')
                 }
@@ -232,7 +247,9 @@ def main():
                             f"Stanowisko osoby {j}": "",
                             f"Email osoby {j}": "",
                             f"LinkedIn URL osoby {j}": "",
-                            f"Type emaila osoby {j}": ""
+                            f"Type emaila osoby {j}": "",
+                            f"Grade emaila osoby {j}": "",
+                            f"SMTP Valid osoby {j}": ""
                         })
                 else:
                     # Pobierz szczegółowe dane i filtruj osoby z emailami
@@ -242,8 +259,8 @@ def main():
                         details = rr_api.lookup_person_details(person['id'])
                         time.sleep(1)  # Rate limiting
                         
-                        # Dodaj tylko osoby z emailem
-                        if details.get('email'):
+                        # Dodaj tylko osoby z emailem i smtp_valid != 'invalid'
+                        if details.get('email') and details.get('smtp_valid') != 'invalid':
                             valid_contacts.append(details)
                         
                         # Przerwij jeśli mamy już 5 kontaktów
@@ -251,7 +268,7 @@ def main():
                             break
                     
                     if not valid_contacts:
-                        result_row["Status"] = "Nie znaleziono kontaktów z emailami"
+                        result_row["Status"] = "Nie znaleziono kontaktów z prawidłowymi emailami"
                         # Wypełnij puste kolumny
                         for j in range(1, 6):
                             result_row.update({
@@ -259,10 +276,12 @@ def main():
                                 f"Stanowisko osoby {j}": "",
                                 f"Email osoby {j}": "",
                                 f"LinkedIn URL osoby {j}": "",
-                                f"Type emaila osoby {j}": ""
+                                f"Type emaila osoby {j}": "",
+                                f"Grade emaila osoby {j}": "",
+                                f"SMTP Valid osoby {j}": ""
                             })
                     else:
-                        result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z emailami"
+                        result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z prawidłowymi emailami"
                         
                         # Dodaj dane kontaktów
                         for j, contact in enumerate(valid_contacts[:5], 1):
@@ -271,7 +290,9 @@ def main():
                                 f"Stanowisko osoby {j}": contact.get('title', ''),
                                 f"Email osoby {j}": contact.get('email', ''),
                                 f"LinkedIn URL osoby {j}": contact.get('linkedin', ''),
-                                f"Type emaila osoby {j}": contact.get('email_type', '')
+                                f"Type emaila osoby {j}": contact.get('email_type', ''),
+                                f"Grade emaila osoby {j}": contact.get('email_grade', ''),
+                                f"SMTP Valid osoby {j}": contact.get('smtp_valid', '')
                             })
                         
                         # Wypełnij pozostałe puste kolumny
@@ -281,7 +302,9 @@ def main():
                                 f"Stanowisko osoby {j}": "",
                                 f"Email osoby {j}": "",
                                 f"LinkedIn URL osoby {j}": "",
-                                f"Type emaila osoby {j}": ""
+                                f"Type emaila osoby {j}": "",
+                                f"Grade emaila osoby {j}": "",
+                                f"SMTP Valid osoby {j}": ""
                             })
                 
                 results.append(result_row)
@@ -310,13 +333,16 @@ def main():
                                         if "kontakt" in result["Status"] and "Nie znaleziono" not in result["Status"])
                 st.metric("Firmy z kontaktami", firms_with_contacts)
             
-            # Download button
-            csv = results_df.to_csv(index=False, encoding='utf-8-sig')
+            # Download button dla Excel
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                results_df.to_excel(writer, index=False, sheet_name='Kontakty')
+            
             st.download_button(
-                "📥 Pobierz wyniki jako CSV",
-                data=csv,
-                file_name="kontakty_inwestorzy.csv",
-                mime="text/csv"
+                "📥 Pobierz wyniki jako Excel",
+                data=output.getvalue(),
+                file_name="kontakty_inwestorzy.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
     
     elif not api_key:
@@ -329,15 +355,15 @@ def main():
         st.markdown("""
         ### Funkcjonalności aplikacji:
         
-        - **Filtrowanie kontaktów**: Pomijane są osoby bez adresów email
+        - **Filtrowanie kontaktów**: Pomijane są osoby bez adresów email lub z nieprawidłowymi emailami
+        - **SMTP Valid**: Wyświetlany jest status walidacji SMTP emaila (valid, invalid, inconclusive)
         - **Type emaila**: Wyświetlany jest typ emaila (professional, personal)
+        - **Grade emaila**: Wyświetlana jest ocena jakości emaila (A, A-, B, B-, C, D, F)
         - **Hierarchia emaili**: 
           1. recommended_professional_email
           2. current_work_email  
-          3. Najlepszy email zawodowy z listy
-        - **Ręczne wprowadzanie domen**: Możliwość testowania pojedynczych firm
-        - **Rozszerzone wyszukiwanie**: Zwiększony limit wyników dla lepszego filtrowania
-        - **Statystyki**: Podsumowanie wyników wyszukiwania
+          3. Najlepszy email zawodowy z listy (z wykluczeniem invalid)
+        - **Export do Excel**: Wyniki są eksportowane do formatu .xlsx
         """)
 
 if __name__ == "__main__":
