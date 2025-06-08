@@ -27,29 +27,52 @@ class RocketReachAPI:
             "accept": "application/json"
         }
 
-    def search_people(self, company_url: str, titles: List[str], exclude_titles: List[str]) -> List[Dict]:
-        """Wyszukaj osoby według stanowisk i umiejętności (skills = stanowiska)"""
+    def search_people_with_emails(self, company_url: str, titles: List[str], exclude_titles: List[str]) -> List[Dict]:
+        """Wyszukaj osoby z prawidłowymi emailami - najpierw po stanowiskach, potem po skills"""
         try:
-            all_results = []
+            valid_contacts = []
             
-            # Wyszukiwanie po stanowiskach
-            st.info("🔍 Wyszukiwanie po stanowiskach...")
+            # ETAP 1: Wyszukiwanie po stanowiskach
+            st.info("🔍 Etap 1: Wyszukiwanie po stanowiskach...")
             title_results = self._search_by_criteria(company_url, "current_title", titles, exclude_titles)
-            all_results.extend(title_results)
             
-            # Jeśli mniej niż 5 wyników, szukaj po skills (używając tych samych wartości co stanowiska)
-            if len(all_results) < 5:
-                st.info("🎯 Rozszerzam wyszukiwanie o umiejętności...")
+            # Sprawdź emaile dla wyników z stanowisk
+            for person in title_results:
+                if len(valid_contacts) >= 5:
+                    break
+                    
+                details = self.lookup_person_details(person['id'])
+                time.sleep(2)  # Rate limiting
+                
+                if details.get('email') and details.get('smtp_valid') != 'invalid':
+                    valid_contacts.append(details)
+                    st.success(f"✅ Znaleziono kontakt przez stanowisko: {details.get('name')} - {details.get('title')}")
+            
+            # ETAP 2: Jeśli mniej niż 5 kontaktów, szukaj po skills
+            if len(valid_contacts) < 5:
+                st.info(f"🎯 Etap 2: Znaleziono {len(valid_contacts)} kontaktów. Rozszerzam wyszukiwanie o umiejętności...")
                 skill_results = self._search_by_criteria(company_url, "skills", titles, exclude_titles)
                 
-                # Dodaj tylko unikalne wyniki
-                for result in skill_results:
-                    if not any(existing['id'] == result['id'] for existing in all_results):
-                        all_results.append(result)
-                        if len(all_results) >= 5:
-                            break
+                # Sprawdź emaile dla wyników z skills (pomijając już znalezione)
+                existing_ids = {contact.get('id') for contact in valid_contacts if 'id' in contact}
+                
+                for person in skill_results:
+                    if len(valid_contacts) >= 5:
+                        break
+                    
+                    # Pomiń jeśli już mamy tę osobę
+                    if person['id'] in existing_ids:
+                        continue
+                        
+                    details = self.lookup_person_details(person['id'])
+                    time.sleep(2)  # Rate limiting
+                    
+                    if details.get('email') and details.get('smtp_valid') != 'invalid':
+                        valid_contacts.append(details)
+                        st.success(f"✅ Znaleziono kontakt przez umiejętności: {details.get('name')} - {details.get('title')}")
             
-            return all_results[:5]  # Ogranicz do 5 wyników
+            st.info(f"📊 Łącznie znaleziono {len(valid_contacts)} kontaktów z prawidłowymi emailami")
+            return valid_contacts[:5]
             
         except Exception as e:
             st.error(f"Błąd wyszukiwania: {str(e)}")
@@ -74,7 +97,7 @@ class RocketReachAPI:
                         field: [value.strip()]
                     },
                     "start": 1,
-                    "page_size": 10
+                    "page_size": 20  # Zwiększono dla lepszych wyników
                 }
                 
                 # Obsługa błędu 429 z retry logic
@@ -128,7 +151,7 @@ class RocketReachAPI:
                         st.error(f"Błąd search API: {response.status_code} - {response.text}")
                         break
                 
-                time.sleep(2)  # Dodatkowe opóźnienie między zapytaniami
+                time.sleep(1)  # Opóźnienie między zapytaniami
             
             return results
             
@@ -211,6 +234,7 @@ class RocketReachAPI:
                         return {}
                     
                     return {
+                        "id": person_id,  # Dodano ID dla śledzenia duplikatów
                         "name": data.get('name', ''),
                         "title": data.get('current_title', ''),
                         "email": professional_email,
@@ -260,7 +284,7 @@ def main():
         st.subheader("Stanowiska do wyszukiwania")
         job_titles_input = st.text_area(
             "Nazwy stanowisk (po jednej w linii)",
-            "M&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger\nacquisitions\ndeal\norigination",
+            "M&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger\nacquisition\ndeal\norigination",
             height=150
         )
         job_titles = [title.strip() for title in job_titles_input.split('\n') if title.strip()]
@@ -321,13 +345,13 @@ def main():
             for i, website in enumerate(websites):
                 status_text.text(f"Analizowanie: {website} ({i+1}/{len(websites)})")
                 
-                # Wyszukaj osoby (skills są automatycznie takie same jak stanowiska)
-                people = rr_api.search_people(website, job_titles, exclude_titles)
+                # Nowa metoda - wyszukiwanie z automatycznym sprawdzaniem emaili
+                valid_contacts = rr_api.search_people_with_emails(website, job_titles, exclude_titles)
                 
                 result_row = {"Website": website}
                 
-                if not people:
-                    result_row["Status"] = "Nie znaleziono kontaktów"
+                if not valid_contacts:
+                    result_row["Status"] = "Nie znaleziono kontaktów z prawidłowymi emailami"
                     for j in range(1, 6):
                         result_row.update({
                             f"Imię i nazwisko osoby {j}": "",
@@ -338,51 +362,28 @@ def main():
                             f"SMTP Valid osoby {j}": ""
                         })
                 else:
-                    valid_contacts = []
+                    result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z prawidłowymi emailami"
                     
-                    for person in people:
-                        details = rr_api.lookup_person_details(person['id'])
-                        time.sleep(2)  # Rate limiting
-                        
-                        if details.get('email') and details.get('smtp_valid') != 'invalid':
-                            valid_contacts.append(details)
-                        
-                        if len(valid_contacts) >= 5:
-                            break
+                    for j, contact in enumerate(valid_contacts[:5], 1):
+                        result_row.update({
+                            f"Imię i nazwisko osoby {j}": contact.get('name', ''),
+                            f"Stanowisko osoby {j}": contact.get('title', ''),
+                            f"Email osoby {j}": contact.get('email', ''),
+                            f"LinkedIn URL osoby {j}": contact.get('linkedin', ''),
+                            f"Grade emaila osoby {j}": contact.get('email_grade', ''),
+                            f"SMTP Valid osoby {j}": contact.get('smtp_valid', '')
+                        })
                     
-                    if not valid_contacts:
-                        result_row["Status"] = "Nie znaleziono kontaktów z prawidłowymi emailami"
-                        for j in range(1, 6):
-                            result_row.update({
-                                f"Imię i nazwisko osoby {j}": "",
-                                f"Stanowisko osoby {j}": "",
-                                f"Email osoby {j}": "",
-                                f"LinkedIn URL osoby {j}": "",
-                                f"Grade emaila osoby {j}": "",
-                                f"SMTP Valid osoby {j}": ""
-                            })
-                    else:
-                        result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z prawidłowymi emailami"
-                        
-                        for j, contact in enumerate(valid_contacts[:5], 1):
-                            result_row.update({
-                                f"Imię i nazwisko osoby {j}": contact.get('name', ''),
-                                f"Stanowisko osoby {j}": contact.get('title', ''),
-                                f"Email osoby {j}": contact.get('email', ''),
-                                f"LinkedIn URL osoby {j}": contact.get('linkedin', ''),
-                                f"Grade emaila osoby {j}": contact.get('email_grade', ''),
-                                f"SMTP Valid osoby {j}": contact.get('smtp_valid', '')
-                            })
-                        
-                        for j in range(len(valid_contacts) + 1, 6):
-                            result_row.update({
-                                f"Imię i nazwisko osoby {j}": "",
-                                f"Stanowisko osoby {j}": "",
-                                f"Email osoby {j}": "",
-                                f"LinkedIn URL osoby {j}": "",
-                                f"Grade emaila osoby {j}": "",
-                                f"SMTP Valid osoby {j}": ""
-                            })
+                    # Wypełnij pozostałe puste kolumny
+                    for j in range(len(valid_contacts) + 1, 6):
+                        result_row.update({
+                            f"Imię i nazwisko osoby {j}": "",
+                            f"Stanowisko osoby {j}": "",
+                            f"Email osoby {j}": "",
+                            f"LinkedIn URL osoby {j}": "",
+                            f"Grade emaila osoby {j}": "",
+                            f"SMTP Valid osoby {j}": ""
+                        })
                 
                 results.append(result_row)
                 progress_bar.progress((i + 1) / len(websites))
