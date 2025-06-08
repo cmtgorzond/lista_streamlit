@@ -168,7 +168,6 @@ class RocketReachAPI:
                     data = response.json()
                     
                     professional_email = ""
-                    email_type = ""
                     email_grade = ""
                     smtp_valid = ""
                     
@@ -177,7 +176,6 @@ class RocketReachAPI:
                         professional_email = data.get('recommended_professional_email')
                         for email_obj in data.get('emails', []):
                             if email_obj.get('email') == professional_email:
-                                email_type = email_obj.get('type', '')
                                 email_grade = email_obj.get('grade', '')
                                 smtp_valid = email_obj.get('smtp_valid', '')
                                 break
@@ -186,7 +184,6 @@ class RocketReachAPI:
                         professional_email = data.get('current_work_email')
                         for email_obj in data.get('emails', []):
                             if email_obj.get('email') == professional_email:
-                                email_type = email_obj.get('type', '')
                                 email_grade = email_obj.get('grade', '')
                                 smtp_valid = email_obj.get('smtp_valid', '')
                                 break
@@ -206,7 +203,6 @@ class RocketReachAPI:
                             
                             best_email = valid_professional_emails[0]
                             professional_email = best_email.get('email', '')
-                            email_type = best_email.get('type', '')
                             email_grade = best_email.get('grade', '')
                             smtp_valid = best_email.get('smtp_valid', '')
                     
@@ -218,7 +214,6 @@ class RocketReachAPI:
                         "name": data.get('name', ''),
                         "title": data.get('current_title', ''),
                         "email": professional_email,
-                        "email_type": email_type,
                         "email_grade": email_grade,
                         "smtp_valid": smtp_valid,
                         "linkedin": data.get('linkedin_url', ''),
@@ -265,7 +260,7 @@ def main():
         st.subheader("Stanowiska do wyszukiwania")
         job_titles_input = st.text_area(
             "Nazwy stanowisk (po jednej w linii)",
-            "M&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger\nacquisition",
+            "M&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger\nacquisition\ndeal\norigination",
             height=150
         )
         job_titles = [title.strip() for title in job_titles_input.split('\n') if title.strip()]
@@ -277,9 +272,6 @@ def main():
             height=100
         )
         exclude_titles = [title.strip() for title in exclude_titles_input.split('\n') if title.strip()]
-        
-        # Informacja o automatycznym użyciu skills
-        st.info("ℹ️ Umiejętności do wyszukiwania są automatycznie takie same jak stanowiska")
 
     # Opcja wyboru źródła danych
     st.header("📊 Źródło danych")
@@ -342,7 +334,6 @@ def main():
                             f"Stanowisko osoby {j}": "",
                             f"Email osoby {j}": "",
                             f"LinkedIn URL osoby {j}": "",
-                            f"Type emaila osoby {j}": "",
                             f"Grade emaila osoby {j}": "",
                             f"SMTP Valid osoby {j}": ""
                         })
@@ -367,7 +358,6 @@ def main():
                                 f"Stanowisko osoby {j}": "",
                                 f"Email osoby {j}": "",
                                 f"LinkedIn URL osoby {j}": "",
-                                f"Type emaila osoby {j}": "",
                                 f"Grade emaila osoby {j}": "",
                                 f"SMTP Valid osoby {j}": ""
                             })
@@ -380,7 +370,6 @@ def main():
                                 f"Stanowisko osoby {j}": contact.get('title', ''),
                                 f"Email osoby {j}": contact.get('email', ''),
                                 f"LinkedIn URL osoby {j}": contact.get('linkedin', ''),
-                                f"Type emaila osoby {j}": contact.get('email_type', ''),
                                 f"Grade emaila osoby {j}": contact.get('email_grade', ''),
                                 f"SMTP Valid osoby {j}": contact.get('smtp_valid', '')
                             })
@@ -391,7 +380,6 @@ def main():
                                 f"Stanowisko osoby {j}": "",
                                 f"Email osoby {j}": "",
                                 f"LinkedIn URL osoby {j}": "",
-                                f"Type emaila osoby {j}": "",
                                 f"Grade emaila osoby {j}": "",
                                 f"SMTP Valid osoby {j}": ""
                             })
