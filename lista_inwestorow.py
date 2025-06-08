@@ -260,7 +260,7 @@ def main():
         st.subheader("Stanowiska do wyszukiwania")
         job_titles_input = st.text_area(
             "Nazwy stanowisk (po jednej w linii)",
-            "M&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger\nacquisition\ndeal\norigination",
+            "M&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger\nacquisitions\ndeal\norigination",
             height=150
         )
         job_titles = [title.strip() for title in job_titles_input.split('\n') if title.strip()]
