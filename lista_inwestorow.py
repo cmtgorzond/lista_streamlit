@@ -65,9 +65,8 @@ class RocketReachAPI:
             "accept": "application/json"
         }
 
-    def search_people(self, company_url: str, titles: List[str], exclude_titles: List[str], 
-                     skills: List[str], exclude_skills: List[str]) -> List[Dict]:
-        """Wyszukaj osoby według stanowisk i umiejętności"""
+    def search_people(self, company_url: str, titles: List[str], exclude_titles: List[str]) -> List[Dict]:
+        """Wyszukaj osoby według stanowisk i umiejętności (skills = stanowiska)"""
         try:
             all_results = []
             
@@ -76,10 +75,10 @@ class RocketReachAPI:
             title_results = self._search_by_criteria(company_url, "current_title", titles, exclude_titles)
             all_results.extend(title_results)
             
-            # Jeśli mniej niż 5 wyników, szukaj po skills
+            # Jeśli mniej niż 5 wyników, szukaj po skills (używając tych samych wartości co stanowiska)
             if len(all_results) < 5:
                 st.info("🎯 Rozszerzam wyszukiwanie o umiejętności...")
-                skill_results = self._search_by_criteria(company_url, "skills", skills, exclude_skills)
+                skill_results = self._search_by_criteria(company_url, "skills", titles, exclude_titles)
                 
                 # Dodaj tylko unikalne wyniki
                 for result in skill_results:
@@ -311,14 +310,6 @@ def main():
         )
         job_titles = [title.strip() for title in job_titles_input.split('\n') if title.strip()]
         
-        st.subheader("Umiejętności do wyszukiwania")
-        skills_input = st.text_area(
-            "Umiejętności (po jednej w linii)",
-            "M&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger\nacquisition",
-            height=150
-        )
-        skills = [skill.strip() for skill in skills_input.split('\n') if skill.strip()]
-        
         st.subheader("Stanowiska do wykluczenia")
         exclude_titles_input = st.text_area(
             "Nazwy stanowisk do wykluczenia (po jednej w linii)",
@@ -327,13 +318,8 @@ def main():
         )
         exclude_titles = [title.strip() for title in exclude_titles_input.split('\n') if title.strip()]
         
-        st.subheader("Umiejętności do wykluczenia")
-        exclude_skills_input = st.text_area(
-            "Umiejętności do wykluczenia (po jednej w linii)",
-            "hr\nhuman resources\nmarketing\nsales\ntalent",
-            height=100
-        )
-        exclude_skills = [skill.strip() for skill in exclude_skills_input.split('\n') if skill.strip()]
+        # Informacja o automatycznym użyciu skills
+        st.info("ℹ️ Umiejętności do wyszukiwania są automatycznie takie same jak stanowiska")
 
     # Opcja wyboru źródła danych
     st.header("📊 Źródło danych")
@@ -383,8 +369,8 @@ def main():
             for i, website in enumerate(websites):
                 status_text.text(f"Analizowanie: {website} ({i+1}/{len(websites)})")
                 
-                # Wyszukaj osoby (po stanowiskach i umiejętnościach)
-                people = rr_api.search_people(website, job_titles, exclude_titles, skills, exclude_skills)
+                # Wyszukaj osoby (skills są automatycznie takie same jak stanowiska)
+                people = rr_api.search_people(website, job_titles, exclude_titles)
                 
                 result_row = {"Website": website}
                 
