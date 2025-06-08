@@ -63,7 +63,7 @@ class RocketReachAPI:
                 params={"id": person_id, "lookup_type": "standard"}
             )
             
-            if response.status_code == 201:
+            if response.status_code == 200:
                 data = response.json()
                 emails = [e['email'] for e in data.get('emails', []) 
                          if e.get('type') == 'professional' and e.get('smtp_valid') == 'valid']
