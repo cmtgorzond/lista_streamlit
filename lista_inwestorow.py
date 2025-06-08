@@ -49,7 +49,7 @@ class RocketReachClient:
                     timeout=30
                 )
                 
-                if response.status_code == 200:
+                if response.status_code == 201:
                     data = response.json()
                     if "people" in data:
                         for person in data["people"]:
@@ -97,7 +97,7 @@ class RocketReachClient:
                 headers=self.headers,
                 timeout=10
             )
-            return response.status_code == 200
+            return response.status_code == 201
         except:
             return False
 
