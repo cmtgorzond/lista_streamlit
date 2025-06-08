@@ -2,21 +2,8 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
-import os
 import re
 from typing import List, Dict
-
-# Sprawdź czy python-dotenv jest zainstalowane
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    st.warning("Biblioteka python-dotenv nie jest zainstalowana. Instaluję...")
-    import subprocess
-    import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-dotenv"])
-    from dotenv import load_dotenv
-    load_dotenv()
 
 # Sprawdź czy openpyxl jest zainstalowane
 try:
@@ -29,31 +16,6 @@ except ImportError:
     import openpyxl
 
 import io
-
-def get_api_key():
-    """Pobiera klucz API z różnych źródeł w kolejności priorytetów"""
-    
-    # 1. GitHub Actions/Environment Variables (najwyższy priorytet)
-    api_key = os.getenv('ROCKETREACH_API_KEY')
-    if api_key:
-        return api_key
-    
-    # 2. Streamlit secrets (dla Streamlit Cloud)
-    try:
-        if hasattr(st, 'secrets') and 'ROCKETREACH_API_KEY' in st.secrets:
-            return st.secrets.ROCKETREACH_API_KEY
-    except:
-        pass
-    
-    # 3. Streamlit secrets z api_keys (alternatywna struktura)
-    try:
-        if hasattr(st, 'secrets') and 'api_keys' in st.secrets and 'rocketreach' in st.secrets.api_keys:
-            return st.secrets.api_keys.rocketreach
-    except:
-        pass
-    
-    # 4. Jeśli nic nie znaleziono, zwróć None
-    return None
 
 class RocketReachAPI:
     def __init__(self, api_key: str):
@@ -289,18 +251,16 @@ def main():
     st.title("🎯 Wyszukiwanie kontaktów do inwestorów")
     st.markdown("Aplikacja do wyszukiwania kontaktów w firmach z zaawansowanymi filtrami")
     
-    # Pobierz klucz API
-    api_key = get_api_key()
-    
     # Sidebar
     with st.sidebar:
         st.header("⚙️ Konfiguracja")
         
-        # Wyświetl status klucza API
-        if api_key:
-            st.success("✅ Klucz API został automatycznie załadowany")
-        else:
-            st.error("❌ Nie znaleziono klucza API - skonfiguruj GitHub Secrets lub zmienne środowiskowe")
+        # Pole do wprowadzania klucza API
+        api_key = st.text_input(
+            "RocketReach API Key",
+            type="password",
+            help="Wprowadź swój klucz API z RocketReach"
+        )
         
         st.subheader("Stanowiska do wyszukiwania")
         job_titles_input = st.text_area(
@@ -472,7 +432,7 @@ def main():
             )
     
     elif not api_key:
-        st.error("❌ Brak klucza API - skonfiguruj GitHub Secrets lub zmienne środowiskowe")
+        st.warning("⚠️ Wprowadź klucz API RocketReach w panelu bocznym")
     elif not websites:
         st.info("📝 Wprowadź dane firm do analizy")
 
