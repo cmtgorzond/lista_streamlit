@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import time
 import os
+import re
 from typing import List, Dict
 
 # Sprawdź czy python-dotenv jest zainstalowane
@@ -32,19 +33,26 @@ import io
 def get_api_key():
     """Pobiera klucz API z różnych źródeł w kolejności priorytetów"""
     
-    # 1. Streamlit secrets (najwyższy priorytet dla wdrożeń w chmurze)
+    # 1. GitHub Actions/Environment Variables (najwyższy priorytet)
+    api_key = os.getenv('ROCKETREACH_API_KEY')
+    if api_key:
+        return api_key
+    
+    # 2. Streamlit secrets (dla Streamlit Cloud)
+    try:
+        if hasattr(st, 'secrets') and 'ROCKETREACH_API_KEY' in st.secrets:
+            return st.secrets.ROCKETREACH_API_KEY
+    except:
+        pass
+    
+    # 3. Streamlit secrets z api_keys (alternatywna struktura)
     try:
         if hasattr(st, 'secrets') and 'api_keys' in st.secrets and 'rocketreach' in st.secrets.api_keys:
             return st.secrets.api_keys.rocketreach
     except:
         pass
     
-    # 2. Zmienna środowiskowa
-    api_key = os.getenv('ROCKETREACH_API_KEY')
-    if api_key:
-        return api_key
-    
-    # 3. Jeśli nic nie znaleziono, zwróć None
+    # 4. Jeśli nic nie znaleziono, zwróć None
     return None
 
 class RocketReachAPI:
@@ -57,25 +65,55 @@ class RocketReachAPI:
             "accept": "application/json"
         }
 
-    def search_people(self, company_url: str, titles: List[str], exclude_titles: List[str]) -> List[Dict]:
-        """Wyszukaj osoby według pełnego URL firmy i stanowisk"""
+    def search_people(self, company_url: str, titles: List[str], exclude_titles: List[str], 
+                     skills: List[str], exclude_skills: List[str]) -> List[Dict]:
+        """Wyszukaj osoby według stanowisk i umiejętności"""
         try:
             all_results = []
+            
+            # Wyszukiwanie po stanowiskach
+            st.info("🔍 Wyszukiwanie po stanowiskach...")
+            title_results = self._search_by_criteria(company_url, "current_title", titles, exclude_titles)
+            all_results.extend(title_results)
+            
+            # Jeśli mniej niż 5 wyników, szukaj po skills
+            if len(all_results) < 5:
+                st.info("🎯 Rozszerzam wyszukiwanie o umiejętności...")
+                skill_results = self._search_by_criteria(company_url, "skills", skills, exclude_skills)
+                
+                # Dodaj tylko unikalne wyniki
+                for result in skill_results:
+                    if not any(existing['id'] == result['id'] for existing in all_results):
+                        all_results.append(result)
+                        if len(all_results) >= 5:
+                            break
+            
+            return all_results[:5]  # Ogranicz do 5 wyników
+            
+        except Exception as e:
+            st.error(f"Błąd wyszukiwania: {str(e)}")
+            return []
+
+    def _search_by_criteria(self, company_url: str, field: str, values: List[str], 
+                          exclude_values: List[str]) -> List[Dict]:
+        """Uniwersalna metoda do wyszukiwania po dowolnym kryterium"""
+        try:
+            results = []
             
             if not company_url.startswith(('http://', 'https://')):
                 company_url = f'https://{company_url}'
             
-            for title in titles:
-                if not title.strip():
+            for value in values:
+                if not value.strip():
                     continue
                     
                 payload = {
                     "query": {
                         "company_domain": [company_url],
-                        "current_title": [title.strip()]
+                        field: [value.strip()]
                     },
                     "start": 1,
-                    "page_size": 20
+                    "page_size": 10
                 }
                 
                 # Obsługa błędu 429 z retry logic
@@ -90,7 +128,6 @@ class RocketReachAPI:
                     )
                     
                     if response.status_code == 429:
-                        # Obsługa rate limit
                         try:
                             error_data = response.json()
                             wait_time = float(error_data.get('wait', 60))
@@ -98,23 +135,31 @@ class RocketReachAPI:
                             wait_time = 60
                         
                         st.warning(f"⏳ Przekroczono limit zapytań. Czekam {wait_time:.0f} sekund...")
-                        time.sleep(wait_time + 5)  # Dodaj 5 sekund bufora
+                        time.sleep(wait_time + 5)
                         retry_count += 1
                         continue
                     
                     elif response.status_code == 201:
                         data = response.json()
                         for person in data.get('profiles', []):
-                            current_title = person.get('current_title', '').lower()
-                            if exclude_titles and any(excl.lower() in current_title for excl in exclude_titles if excl.strip()):
+                            # Sprawdź wykluczenia
+                            if field == "current_title":
+                                check_value = person.get('current_title', '').lower()
+                            elif field == "skills":
+                                check_value = ' '.join(person.get('skills', [])).lower()
+                            else:
+                                check_value = str(person.get(field, '')).lower()
+                            
+                            if exclude_values and any(excl.lower() in check_value for excl in exclude_values if excl.strip()):
                                 continue
                                 
-                            all_results.append({
+                            results.append({
                                 "id": person.get('id'),
                                 "name": person.get('name'),
                                 "title": person.get('current_title'),
                                 "company": person.get('current_employer'),
-                                "linkedin": person.get('linkedin_url')
+                                "linkedin": person.get('linkedin_url'),
+                                "skills": person.get('skills', [])
                             })
                         break
                     
@@ -124,10 +169,10 @@ class RocketReachAPI:
                 
                 time.sleep(2)  # Dodatkowe opóźnienie między zapytaniami
             
-            return all_results
+            return results
             
         except Exception as e:
-            st.error(f"Błąd wyszukiwania: {str(e)}")
+            st.error(f"Błąd wyszukiwania po {field}: {str(e)}")
             return []
 
     def lookup_person_details(self, person_id: int) -> Dict:
@@ -147,7 +192,6 @@ class RocketReachAPI:
                 )
                 
                 if response.status_code == 429:
-                    # Obsługa rate limit dla lookup
                     try:
                         error_data = response.json()
                         wait_time = float(error_data.get('wait', 60))
@@ -167,6 +211,7 @@ class RocketReachAPI:
                     email_grade = ""
                     smtp_valid = ""
                     
+                    # Hierarchia wyboru emaila
                     if data.get('recommended_professional_email'):
                         professional_email = data.get('recommended_professional_email')
                         for email_obj in data.get('emails', []):
@@ -204,6 +249,7 @@ class RocketReachAPI:
                             email_grade = best_email.get('grade', '')
                             smtp_valid = best_email.get('smtp_valid', '')
                     
+                    # Sprawdź czy email ma smtp_valid = 'invalid'
                     if smtp_valid == 'invalid':
                         return {}
                     
@@ -215,7 +261,8 @@ class RocketReachAPI:
                         "email_grade": email_grade,
                         "smtp_valid": smtp_valid,
                         "linkedin": data.get('linkedin_url', ''),
-                        "company": data.get('current_employer', '')
+                        "company": data.get('current_employer', ''),
+                        "skills": data.get('skills', [])
                     }
                 else:
                     st.error(f"Błąd lookup API: {response.status_code} - {response.text}")
@@ -250,11 +297,11 @@ def main():
     with st.sidebar:
         st.header("⚙️ Konfiguracja")
         
-        # Wyświetl status klucza API (bez opcji nadpisania)
+        # Wyświetl status klucza API
         if api_key:
             st.success("✅ Klucz API został automatycznie załadowany")
         else:
-            st.error("❌ Nie znaleziono klucza API w zmiennych środowiskowych")
+            st.error("❌ Nie znaleziono klucza API - skonfiguruj GitHub Secrets lub zmienne środowiskowe")
         
         st.subheader("Stanowiska do wyszukiwania")
         job_titles_input = st.text_area(
@@ -264,6 +311,14 @@ def main():
         )
         job_titles = [title.strip() for title in job_titles_input.split('\n') if title.strip()]
         
+        st.subheader("Umiejętności do wyszukiwania")
+        skills_input = st.text_area(
+            "Umiejętności (po jednej w linii)",
+            "M&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger\nacquisition",
+            height=150
+        )
+        skills = [skill.strip() for skill in skills_input.split('\n') if skill.strip()]
+        
         st.subheader("Stanowiska do wykluczenia")
         exclude_titles_input = st.text_area(
             "Nazwy stanowisk do wykluczenia (po jednej w linii)",
@@ -271,6 +326,14 @@ def main():
             height=100
         )
         exclude_titles = [title.strip() for title in exclude_titles_input.split('\n') if title.strip()]
+        
+        st.subheader("Umiejętności do wykluczenia")
+        exclude_skills_input = st.text_area(
+            "Umiejętności do wykluczenia (po jednej w linii)",
+            "hr\nhuman resources\nmarketing\nsales\ntalent",
+            height=100
+        )
+        exclude_skills = [skill.strip() for skill in exclude_skills_input.split('\n') if skill.strip()]
 
     # Opcja wyboru źródła danych
     st.header("📊 Źródło danych")
@@ -320,7 +383,8 @@ def main():
             for i, website in enumerate(websites):
                 status_text.text(f"Analizowanie: {website} ({i+1}/{len(websites)})")
                 
-                people = rr_api.search_people(website, job_titles, exclude_titles)
+                # Wyszukaj osoby (po stanowiskach i umiejętnościach)
+                people = rr_api.search_people(website, job_titles, exclude_titles, skills, exclude_skills)
                 
                 result_row = {"Website": website}
                 
@@ -341,7 +405,7 @@ def main():
                     
                     for person in people:
                         details = rr_api.lookup_person_details(person['id'])
-                        time.sleep(2)  # Zwiększone opóźnienie
+                        time.sleep(2)  # Rate limiting
                         
                         if details.get('email') and details.get('smtp_valid') != 'invalid':
                             valid_contacts.append(details)
@@ -422,7 +486,7 @@ def main():
             )
     
     elif not api_key:
-        st.error("❌ Brak klucza API - skonfiguruj go w pliku .env")
+        st.error("❌ Brak klucza API - skonfiguruj GitHub Secrets lub zmienne środowiskowe")
     elif not websites:
         st.info("📝 Wprowadź dane firm do analizy")
 
