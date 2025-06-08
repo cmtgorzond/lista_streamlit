@@ -46,7 +46,8 @@ class RocketReachAPI:
                 
                 if details.get('email') and details.get('smtp_valid') != 'invalid':
                     valid_contacts.append(details)
-                    st.success(f"✅ Znaleziono kontakt przez stanowisko: {details.get('name')} - {details.get('title')}")
+                    # Nowy format komunikatu z emailem, grade i smtp_valid
+                    st.success(f"✅ Znaleziono kontakt przez stanowisko: {details.get('name')} - {details.get('title')} | {details.get('email')} (Grade: {details.get('email_grade', 'N/A')}, SMTP: {details.get('smtp_valid', 'N/A')})")
             
             # ETAP 2: Jeśli mniej niż 5 kontaktów, szukaj po skills
             if len(valid_contacts) < 5:
@@ -69,7 +70,8 @@ class RocketReachAPI:
                     
                     if details.get('email') and details.get('smtp_valid') != 'invalid':
                         valid_contacts.append(details)
-                        st.success(f"✅ Znaleziono kontakt przez umiejętności: {details.get('name')} - {details.get('title')}")
+                        # Nowy format komunikatu z emailem, grade i smtp_valid
+                        st.success(f"✅ Znaleziono kontakt przez umiejętności: {details.get('name')} - {details.get('title')} | {details.get('email')} (Grade: {details.get('email_grade', 'N/A')}, SMTP: {details.get('smtp_valid', 'N/A')})")
             
             st.info(f"📊 Łącznie znaleziono {len(valid_contacts)} kontaktów z prawidłowymi emailami")
             return valid_contacts[:5]
