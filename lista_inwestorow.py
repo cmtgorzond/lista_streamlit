@@ -2,8 +2,15 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
+from urllib.parse import urlparse
 
 st.title("🎯 RocketReach – Wyszukiwarka kontaktów po stronie internetowej firmy")
+
+# Pomocnicza funkcja do ekstrakcji domeny
+def extract_domain(url):
+    parsed = urlparse(url)
+    netloc = parsed.netloc or parsed.path
+    return netloc.replace("www.", "").lower().strip("/")
 
 # Wczytywanie pliku CSV
 uploaded_file = st.file_uploader("📁 Wgraj plik CSV z kolumną A jako strony internetowe firm:", type=["csv"])
@@ -28,6 +35,7 @@ def search_people(domain, api_key, include_keywords, exclude_keywords, max_resul
         "Api-Key": api_key
     }
     people = []
+    titles_seen = []
     start = 1
 
     while len(people) < max_results:
@@ -40,6 +48,7 @@ def search_people(domain, api_key, include_keywords, exclude_keywords, max_resul
         }
         response = requests.post(search_url, json=payload, headers=headers)
         if response.status_code != 200:
+            st.error(f"Błąd API ({response.status_code}): {response.text}")
             break
 
         data = response.json()
@@ -49,6 +58,7 @@ def search_people(domain, api_key, include_keywords, exclude_keywords, max_resul
 
         for profile in profiles:
             title = profile.get("current_title", "").lower()
+            titles_seen.append(title)
             if any(keyword in title for keyword in include_keywords) and not any(
                 ex in title for ex in exclude_keywords
             ):
@@ -59,9 +69,9 @@ def search_people(domain, api_key, include_keywords, exclude_keywords, max_resul
         start = data.get("pagination", {}).get("next", None)
         if not start:
             break
-        time.sleep(1)  # Drobna przerwa dla bezpieczeństwa
+        time.sleep(1)
 
-    return people
+    return people, titles_seen
 
 def lookup_person(person_id, api_key):
     url = f"https://api.rocketreach.co/api/v2/person/lookup?id={person_id}&lookup_type=standard"
@@ -85,11 +95,15 @@ if uploaded_file and api_key and include_keywords:
     output_data = []
 
     for index, row in df.iterrows():
-        website = str(row[0])
-        st.write(f"🔍 Szukam kontaktów dla: {website}")
-        person_ids = search_people(website, api_key, include_keywords, exclude_keywords)
+        raw_url = str(row[0])
+        domain = extract_domain(raw_url)
+        st.write(f"🔍 Szukam kontaktów dla: `{domain}`")
+
+        person_ids, titles_seen = search_people(domain, api_key, include_keywords, exclude_keywords)
 
         if not person_ids:
+            st.warning(f"⚠️ Nie znaleziono kontaktów dla: {domain}")
+            st.text(f"Znalezione tytuły (nieprzefiltrowane): {titles_seen}")
             output_data.append(["nie znaleziono kontaktów"] + [""] * 19)
         else:
             row_data = []
@@ -99,7 +113,7 @@ if uploaded_file and api_key and include_keywords:
                     row_data.extend(details)
                 else:
                     row_data.extend(["", "", "", ""])
-            while len(row_data) < 20:  # jeśli mniej niż 5 osób
+            while len(row_data) < 20:
                 row_data.extend(["", "", "", ""])
             output_data.append(row_data)
 
@@ -115,7 +129,7 @@ if uploaded_file and api_key and include_keywords:
     st.success("✅ Gotowe! Oto wyniki:")
     st.dataframe(results_df)
 
-    # Eksport
+    # Eksport CSV
     csv = results_df.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Pobierz wyniki jako CSV", data=csv, file_name="wyniki_kontakty.csv", mime="text/csv")
 else:
