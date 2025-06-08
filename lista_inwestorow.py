@@ -6,17 +6,21 @@ from urllib.parse import urlparse
 
 st.title("🎯 RocketReach – Wyszukiwarka kontaktów po stronie internetowej firmy")
 
+# Pomocnicza funkcja do wyodrębnienia domeny z URL
 def extract_domain(url):
     parsed = urlparse(url)
     netloc = parsed.netloc or parsed.path
     return netloc.replace("www.", "").lower().strip("/")
 
-uploaded_file = st.file_uploader("📁 Wgraj plik CSV z kolumną A jako strony internetowe firm:", type=["csv"])
-api_key = st.text_input("🔑 Wprowadź swój API Key do RocketReach:", type="password")
+# Wczytywanie pliku CSV
+uploaded_file = st.file_uploader("📁 Wgraj plik CSV (kolumna A = strona firmy):", type=["csv"])
 
-include_keywords_input = st.text_area("📌 Wpisz słowa kluczowe do filtrowania stanowisk (oddzielone przecinkami):",
-                                      value="engineer, developer, design, analog, intern")
-exclude_keywords_input = st.text_area("🚫 Wpisz słowa kluczowe do wykluczenia (oddzielone przecinkami):")
+# API Key
+api_key = st.text_input("🔑 Wprowadź swój RocketReach API Key:", type="password")
+
+# Filtry tytułów
+include_keywords_input = st.text_area("📌 Wpisz słowa kluczowe (oddziel przecinkami):", value="AI, Engineer, Intern")
+exclude_keywords_input = st.text_area("🚫 Wpisz słowa do wykluczenia (oddziel przecinkami):")
 
 include_keywords = [kw.strip().lower() for kw in include_keywords_input.split(",") if kw.strip()]
 exclude_keywords = [kw.strip().lower() for kw in exclude_keywords_input.split(",") if kw.strip()]
@@ -54,26 +58,28 @@ def search_people(domain, api_key, include_keywords, exclude_keywords, max_resul
         for profile in profiles:
             title = (profile.get("current_title") or "").lower()
             status = profile.get("status", "")
+            profile_id = profile.get("id")
+
             titles_seen.append(f"{title} [{status}]")
 
             if not title:
-                reasons_skipped.append("brak tytułu")
+                reasons_skipped.append(f"(ID {profile_id}) brak tytułu")
                 continue
 
             if not include_keywords:
-                match = True
+                matched = True
             else:
-                match = any(kw in title for kw in include_keywords) and not any(ex in title for ex in exclude_keywords)
+                matched = any(kw in title for kw in include_keywords) and not any(ex in title for ex in exclude_keywords)
 
-            if match and status in {"complete", "progress"}:
-                people.append(profile["id"])
+            if matched and status in {"complete", "progress"}:
+                people.append(profile_id)
             else:
                 reason = []
-                if not match:
-                    reason.append("nie pasuje do filtra")
+                if not matched:
+                    reason.append("nie pasuje do filtrów")
                 if status not in {"complete", "progress"}:
                     reason.append(f"status={status}")
-                reasons_skipped.append(f"{title} ({', '.join(reason)})")
+                reasons_skipped.append(f"(ID {profile_id}) '{title}' ➤ {', '.join(reason)}")
 
             if len(people) >= max_results:
                 break
@@ -102,6 +108,7 @@ def lookup_person(person_id, api_key):
     linkedin = data.get("linkedin_url", "")
     return [name, title, email, linkedin]
 
+# Logika główna aplikacji
 if uploaded_file and api_key:
     df = pd.read_csv(uploaded_file)
     output_data = []
@@ -119,8 +126,9 @@ if uploaded_file and api_key:
             st.success(f"✅ Znaleziono {len(person_ids)} dopasowanych osób")
 
         st.caption(f"🔍 Tytuły i statusy: {', '.join(titles_seen) or 'brak danych'}")
+
         if skipped:
-            with st.expander("🚫 Odrzucone profile (debug)"):
+            with st.expander("🚫 Szczegóły odrzuconych profili"):
                 for item in skipped:
                     st.text(item)
 
@@ -153,4 +161,4 @@ if uploaded_file and api_key:
     csv = results_df.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Pobierz wyniki jako CSV", data=csv, file_name="wyniki_kontakty.csv", mime="text/csv")
 else:
-    st.info("Wgraj plik CSV, wpisz API Key i opcjonalnie słowa kluczowe (mogą być puste, wtedy pobierze wszystkich).")
+    st.info("Wgraj plik CSV, wpisz API Key i słowa kluczowe.")
