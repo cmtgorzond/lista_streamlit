@@ -19,13 +19,13 @@ uploaded_file = st.file_uploader("📁 Wgraj plik CSV z kolumną A jako strony i
 api_key = st.text_input("🔑 Wprowadź swój API Key do RocketReach:", type="password")
 
 # Wprowadzenie słów kluczowych
-include_keywords = st.text_area("📌 Wpisz słowa kluczowe do filtrowania stanowisk (oddzielone przecinkami):", 
-                                value="M&A, M and A, corporate development, strategy, strategic, growth, merger")
-exclude_keywords = st.text_area("🚫 Wpisz słowa kluczowe do wykluczenia (oddzielone przecinkami):")
+include_keywords_input = st.text_area("📌 Wpisz słowa kluczowe do filtrowania stanowisk (oddzielone przecinkami):", 
+                                      value="M&A, M and A, corporate development, strategy, strategic, growth, merger")
+exclude_keywords_input = st.text_area("🚫 Wpisz słowa kluczowe do wykluczenia (oddzielone przecinkami):")
 
 # Przetwarzanie danych wejściowych
-include_keywords = [kw.strip().lower() for kw in include_keywords.split(",") if kw.strip()]
-exclude_keywords = [kw.strip().lower() for kw in exclude_keywords.split(",") if kw.strip()]
+include_keywords = [kw.strip().lower() for kw in include_keywords_input.split(",") if kw.strip()]
+exclude_keywords = [kw.strip().lower() for kw in exclude_keywords_input.split(",") if kw.strip()]
 
 def search_people(domain, api_key, include_keywords, exclude_keywords, max_results=5):
     search_url = "https://api.rocketreach.co/api/v2/person/search"
@@ -59,9 +59,13 @@ def search_people(domain, api_key, include_keywords, exclude_keywords, max_resul
         for profile in profiles:
             title = profile.get("current_title", "").lower()
             titles_seen.append(title)
-            if any(keyword in title for keyword in include_keywords) and not any(
-                ex in title for ex in exclude_keywords
-            ):
+
+            if not include_keywords:  # jeśli nie ma filtrów — weź wszystkich
+                match = True
+            else:
+                match = any(kw in title for kw in include_keywords) and not any(ex in title for ex in exclude_keywords)
+
+            if match:
                 people.append(profile["id"])
                 if len(people) >= max_results:
                     break
@@ -90,20 +94,25 @@ def lookup_person(person_id, api_key):
     linkedin = data.get("linkedin_url", "")
     return [name, title, email, linkedin]
 
-if uploaded_file and api_key and include_keywords:
+if uploaded_file and api_key:
     df = pd.read_csv(uploaded_file)
     output_data = []
 
     for index, row in df.iterrows():
         raw_url = str(row[0])
         domain = extract_domain(raw_url)
-        st.write(f"🔍 Szukam kontaktów dla: `{domain}`")
+        st.markdown(f"### 🔍 Firma: `{domain}`")
 
         person_ids, titles_seen = search_people(domain, api_key, include_keywords, exclude_keywords)
 
         if not person_ids:
-            st.warning(f"⚠️ Nie znaleziono kontaktów dla: {domain}")
-            st.text(f"Znalezione tytuły (nieprzefiltrowane): {titles_seen}")
+            st.warning(f"⚠️ Nie znaleziono kontaktów (pasujących do filtrów)")
+        else:
+            st.success(f"✅ Znaleziono {len(person_ids)} dopasowanych osób")
+
+        st.caption(f"🔎 Tytuły znalezione w wynikach: {', '.join(titles_seen) or 'brak danych'}")
+
+        if not person_ids:
             output_data.append(["nie znaleziono kontaktów"] + [""] * 19)
         else:
             row_data = []
@@ -133,4 +142,4 @@ if uploaded_file and api_key and include_keywords:
     csv = results_df.to_csv(index=False).encode("utf-8")
     st.download_button("📥 Pobierz wyniki jako CSV", data=csv, file_name="wyniki_kontakty.csv", mime="text/csv")
 else:
-    st.info("Wgraj plik CSV, wpisz API Key oraz przynajmniej jedno słowo kluczowe.")
+    st.info("Wgraj plik CSV, wpisz API Key i opcjonalnie słowa kluczowe (mogą być puste, wtedy pobiera wszystkich).")
