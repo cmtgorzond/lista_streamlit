@@ -45,7 +45,7 @@ def search_people(api_key: str, company_url: str, titles: List[str], exclude_tit
             
             st.write(f"Status odpowiedzi: {response.status_code}")
             
-            if response.status_code == 200:
+            if response.status_code == 201:
                 data = response.json()
                 st.write(f"Odpowiedź API: {data}")
                 
