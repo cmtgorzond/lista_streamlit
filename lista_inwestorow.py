@@ -181,7 +181,7 @@ class RocketReachAPI:
             return []
 
     def bulk_lookup(self, ids: List[int]):
-        """Wywołaj bulk lookup z webhookiem"""
+        """Wywołaj bulk lookup z webhookiem - POPRAWIONY ENDPOINT"""
         try:
             self._rate_limit_check()
             
@@ -194,7 +194,7 @@ class RocketReachAPI:
                 payload["webhook_id"] = self.webhook_id
             
             response = requests.post(
-                f"{self.base_url}/api/v2/person/bulk_lookup",  # Poprawiony endpoint z podkreśleniem
+                f"{self.base_url}/api/v2/person/bulk-lookup",  # POPRAWIONY ENDPOINT Z MYŚLNIKIEM
                 headers=self.headers,
                 json=payload,
                 timeout=30
