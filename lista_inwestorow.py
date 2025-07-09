@@ -180,7 +180,7 @@ class RocketReachAPI:
             st.error(f"Błąd wyszukiwania po {field}: {str(e)}")
             return []
 
-    def bulk_lookup(self, ids: List[int]):
+    def bulklookup(self, ids: List[int]):
         """Wywołaj bulk lookup z webhookiem - POPRAWIONY ENDPOINT Z PODKREŚLENIEM"""
         try:
             self._rate_limit_check()
@@ -194,7 +194,7 @@ class RocketReachAPI:
                 payload["webhook_id"] = self.webhook_id
             
             response = requests.post(
-                f"{self.base_url}/api/v2/person/bulk_lookup",  # POPRAWIONY ENDPOINT Z PODKREŚLENIEM
+                f"{self.base_url}/api/v2/person/bulklookup",  # POPRAWIONY ENDPOINT Z PODKREŚLENIEM
                 headers=self.headers,
                 json=payload,
                 timeout=30
@@ -411,7 +411,7 @@ def main():
                         for profile in profiles[:5]:
                             st.write(f"• {profile.get('name', 'N/A')} - {profile.get('title', 'N/A')} ({profile.get('company', 'N/A')})")
                         
-                        rr_api.bulk_lookup(ids)
+                        rr_api.bulklookup(ids)
                     else:
                         st.write("❌ Brak profili do sprawdzenia")
                     
