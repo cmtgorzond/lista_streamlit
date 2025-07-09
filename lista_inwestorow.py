@@ -3,19 +3,22 @@ import pandas as pd
 import requests
 import time
 import random
-import io
 from typing import List, Dict
 from urllib.parse import urlparse
+import io
 
-# --- Konfiguracja Webhook ---
-WEBHOOK_URL = "https://8721272bed36.ngrok-free.app/webhook"
-WEBHOOK_ID  = "TWÓJ_WEBHOOK_ID"  # wklej swój Webhook ID z RocketReach
+# --- STREAMLIT APP ---
+
+def extract_domain(url: str) -> str:
+    if not url.startswith(("http://","https://")):
+        url = "https://" + url
+    domain = urlparse(url).netloc.lower()
+    return domain[4:] if domain.startswith("www.") else domain
 
 class RocketReachAPI:
-    def __init__(self, api_key: str, webhook_id: str):
+    def __init__(self, api_key: str):
         self.api_key = api_key
-        self.webhook_id = webhook_id
-        self.base_url = "https://api.rocketreach.co"
+        self.base = "https://api.rocketreach.co"
         self.headers = {"Api-Key": api_key}
 
     def search_people(self, domain: str, titles: List[str], exclude: List[str]) -> List[Dict]:
@@ -28,88 +31,97 @@ class RocketReachAPI:
             "page_size": 25,
             "fields": ["id","name","current_title","current_employer","linkedin_url"]
         }
-        resp = requests.post(f"{self.base_url}/api/v2/person/search",
-                             headers=self.headers, json=payload)
-        if resp.status_code in (200, 201):
-            return resp.json().get("profiles", [])[:10]
-        st.error(f"Search API error {resp.status_code}: {resp.text}")
+        r = requests.post(f"{self.base}/api/v2/person/search", json=payload, headers=self.headers)
+        if r.status_code in (200,201):
+            return r.json().get("profiles", [])[:5]
+        st.error(f"Search API error {r.status_code}: {r.text}")
         return []
 
-    def bulk_lookup(self, ids: List[int]):
-        payload = {
-            "profiles": [{"id": i} for i in ids],
-            "lookup_type": "standard",
-            "webhook_id": self.webhook_id
-        }
-        resp = requests.post(f"{self.base_url}/api/v2/person/bulk-lookup",
-                             headers=self.headers, json=payload)
-        if resp.status_code == 200:
-            st.info("🔔 Bulk lookup wysłany, wyniki przyjdą przez webhook")
-        else:
-            st.error(f"Bulk lookup error {resp.status_code}: {resp.text}")
-
-def extract_domain(input_str: str) -> str:
-    if '@' in input_str:
-        return input_str.split('@')[1].lower()
-    if not input_str.startswith(("http://","https://")):
-        input_str = "https://" + input_str
-    netloc = urlparse(input_str).netloc.lower()
-    return netloc[4:] if netloc.startswith("www.") else netloc
+    def lookup_person(self, person_id: int) -> Dict:
+        r = requests.get(
+            f"{self.base}/api/v2/person/lookup",
+            params={"id": person_id, "lookup_type": "standard"},
+            headers=self.headers
+        )
+        if r.status_code == 200:
+            data = r.json()
+            # wyciągnij zweryfikowany email
+            for e in data.get("emails", []):
+                if e.get("type")=="professional" and e.get("smtp_valid")=="valid":
+                    return {
+                        "name": data["name"],
+                        "title": data["current_title"],
+                        "email": e["email"],
+                        "email_grade": e.get("grade",""),
+                        "smtp_valid": e.get("smtp_valid",""),
+                        "linkedin": data.get("linkedin_url","")
+                    }
+            return {}
+        st.error(f"Lookup API error {r.status_code}")
+        return {}
 
 def main():
-    st.set_page_config(page_title="🚀 RocketReach Webhook", layout="wide")
-    st.title("🚀 Wyszukiwarka z Webhook RocketReach")
+    st.set_page_config(page_title="RocketReach Contact Finder", layout="wide")
+    st.title("RocketReach Contact Finder")
 
-    # Sidebar: konfiguracja
-    st.sidebar.header("⚙️ Konfiguracja")
-    api_key    = st.sidebar.text_input("RocketReach API Key", type="password")
-    webhook_id = st.sidebar.text_input("Webhook ID", value=WEBHOOK_ID)
-    st.sidebar.markdown(f"Webhook URL: `{WEBHOOK_URL}`")
+    api_key = st.sidebar.text_input("RocketReach API Key", type="password")
+    st.sidebar.subheader("Stanowiska")
+    titles = [t.strip() for t in st.sidebar.text_area(
+        "", "sales\nM&A\ncorporate development\nstrategy\ngrowth\nmerger\nacquisition"
+    ).split("\n") if t.strip()]
+    st.sidebar.subheader("Wykluczenia")
+    exclude = [t.strip() for t in st.sidebar.text_area(
+        "", "hr\nmarketing\nsales\ntalent\nhuman resources"
+    ).split("\n") if t.strip()]
 
-    st.sidebar.subheader("Stanowiska do wyszukiwania")
-    default_titles = ["M&A","M and A","corporate development","strategy","strategic",
-                      "growth","merger","acquisition","deal","origination"]
-    titles_input = st.sidebar.text_area("", "\n".join(default_titles), height=150)
-    job_titles = [t.strip() for t in titles_input.split("\n") if t.strip()]
-
-    st.sidebar.subheader("Stanowiska do wykluczenia")
-    default_exclude = ["hr","human resources","marketing","sales","talent"]
-    exclude_input = st.sidebar.text_area("", "\n".join(default_exclude), height=100)
-    exclude_titles = [t.strip() for t in exclude_input.split("\n") if t.strip()]
-
-    # Wybór sposobu wprowadzania domen
-    st.header("📊 Wprowadzanie domen")
-    mode = st.radio("Źródło domen:", ["Upload pliku CSV", "Wpisz domenę ręcznie"])
-    websites = []
-
-    if mode == "Upload pliku CSV":
-        uploaded = st.file_uploader("Plik CSV (kolumna A)", type="csv")
-        if uploaded:
-            df = pd.read_csv(uploaded)
-            websites = df.iloc[:,0].dropna().tolist()
-            st.dataframe(df.head())
+    st.header("Wprowadź domenę albo plik CSV")
+    mode = st.radio("", ["Ręcznie", "CSV"])
+    sites = []
+    if mode=="Ręcznie":
+        dom = st.text_input("Domena firmy lub URL", placeholder="example.com")
+        if dom: sites = [dom.strip()]
     else:
-        manual = st.text_input("Wpisz domenę lub email osoby", placeholder="example.com lub user@example.com")
-        if manual:
-            websites = [manual.strip()]
+        f = st.file_uploader("CSV z listą domen (kol A)", type="csv")
+        if f:
+            df = pd.read_csv(f)
+            sites = df.iloc[:,0].dropna().tolist()
+            st.dataframe(df.head())
 
-    if not api_key or not webhook_id:
-        st.warning("Podaj API Key i Webhook ID w panelu bocznym")
-        return
-
-    if websites and st.button("🚀 Rozpocznij wyszukiwanie"):
-        rr = RocketReachAPI(api_key, webhook_id)
-        for site in websites:
+    if api_key and sites and st.button("Szukaj"):
+        rr = RocketReachAPI(api_key)
+        all_rows = []
+        for site in sites:
             domain = extract_domain(site)
-            st.write(f"🔍 Szukam w: {domain}")
-            profiles = rr.search_people(domain, job_titles, exclude_titles)
-            ids = [p["id"] for p in profiles[:5]]  # teraz 5 profili
-            if ids:
-                rr.bulk_lookup(ids)
+            st.write(f"🔍 Szukam w {domain}")
+            profiles = rr.search_people(domain, titles, exclude)
+            row = {"Company": domain}
+            if profiles:
+                row["Status"] = f"Found {len(profiles)}"
+                for i,p in enumerate(profiles,1):
+                    details = rr.lookup_person(p["id"])
+                    time.sleep(1)
+                    if details:
+                        row[f"Name {i}"] = details["name"]
+                        row[f"Title {i}"] = details["title"]
+                        row[f"Email {i}"] = details["email"]
+                        row[f"Grade {i}"] = details["email_grade"]
+                        row[f"SMTP {i}"] = details["smtp_valid"]
+                        row[f"LinkedIn {i}"] = details["linkedin"]
+                # fill empty up to 5
+                for j in range(len(profiles)+1,6):
+                    for col in ["Name","Title","Email","Grade","SMTP","LinkedIn"]:
+                        row[f"{col} {j}"]=""
             else:
-                st.write("❌ Brak profili do bulk lookup")
-            time.sleep(random.uniform(1,2))
-        st.success("📬 Wysyłka zapytań zakończona. Oczekuj webhook.")
-        
-if __name__ == "__main__":
+                row["Status"]="No profiles"
+                for j in range(1,6):
+                    for col in ["Name","Title","Email","Grade","SMTP","LinkedIn"]:
+                        row[f"{col} {j}"]=""
+            all_rows.append(row)
+        df_out = pd.DataFrame(all_rows)
+        st.dataframe(df_out)
+        buf = io.BytesIO()
+        df_out.to_excel(buf, index=False)
+        st.download_button("Pobierz XLSX", buf.getvalue(), "results.xlsx")
+
+if __name__=="__main__":
     main()
