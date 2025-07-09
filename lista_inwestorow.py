@@ -5,6 +5,8 @@ import time
 import random
 import re
 from typing import List, Dict
+from functools import lru_cache
+from urllib.parse import urlparse
 
 # Sprawdź czy openpyxl jest zainstalowane
 try:
@@ -27,92 +29,185 @@ class RocketReachAPI:
             "Content-Type": "application/json",
             "accept": "application/json"
         }
-        self.request_timestamps = []
+        self.request_history = []
+        self.cache = {}
+        self.email_cache = {}
 
-    def _rate_limit_check(self):
-        """Zachowaj maksymalnie 5 zapytań na sekundę zgodnie z dokumentacją API"""
-        now = time.time()
-        # Usuń stare timestampy (starsze niż 1 sekunda)
-        self.request_timestamps = [t for t in self.request_timestamps if t > now - 1]
-        
-        if len(self.request_timestamps) >= 5:
-            sleep_time = 1.0 - (now - self.request_timestamps[0])
-            if sleep_time > 0:
-                time.sleep(sleep_time + random.uniform(0.1, 0.3))  # Dodaj losowy jitter
-        
-        self.request_timestamps.append(now)
-
-    def _handle_rate_limit(self, response):
-        """Automatyczna obsługa limitu z wykładniczym backoffem"""
-        if response.status_code == 429:
-            try:
-                error_data = response.json()
-                retry_after = float(error_data.get('wait', 60))
-            except:
-                retry_after = float(response.headers.get('Retry-After', 60))
+    def _extract_domain(self, url_or_email: str) -> str:
+        """Wyciągnij domenę z URL lub emaila"""
+        if '@' in url_or_email:
+            # To jest email
+            return url_or_email.split('@')[1].lower()
+        else:
+            # To jest URL
+            if not url_or_email.startswith(('http://', 'https://')):
+                url_or_email = f'https://{url_or_email}'
             
-            st.warning(f"⏳ Przekroczono limit. Czekam {retry_after:.0f} sekund...")
-            time.sleep(retry_after + random.uniform(1, 3))  # Dodaj losowy jitter
-            return True
-        return False
+            parsed = urlparse(url_or_email)
+            domain = parsed.netloc.lower()
+            # Usuń www. jeśli jest
+            if domain.startswith('www.'):
+                domain = domain[4:]
+            return domain
+
+    def _rate_limit_delay(self):
+        """Dynamiczne opóźnienie bazujące na historii requestów"""
+        now = time.time()
+        # Śledzenie ostatnich 60 sekund
+        self.request_history = [t for t in self.request_history if t > now - 60]
+        
+        # RocketReach limit: 45 requestów/minutę
+        if len(self.request_history) >= 40:  # Bezpieczny margines
+            sleep_time = 60 - (now - self.request_history[0]) + random.uniform(1, 3)
+            st.warning(f"⏳ Osiągnięto limit RPM. Czekam {sleep_time:.1f}s...")
+            time.sleep(sleep_time)
+            self.request_history = []
+
+    def _make_request(self, method: str, endpoint: str, **kwargs):
+        """Uniwersalna metoda do requestów z retry logic i cache'owaniem"""
+        # Tworzenie klucza cache dla GET requestów
+        cache_key = None
+        if method == "GET" and "params" in kwargs:
+            cache_key = f"{endpoint}_{str(kwargs['params'])}"
+            if cache_key in self.cache:
+                return self.cache[cache_key]
+
+        max_retries = 3
+        backoff_factor = 1.5
+        
+        for attempt in range(max_retries):
+            self._rate_limit_delay()
+            
+            try:
+                response = requests.request(
+                    method,
+                    f"{self.base_url}{endpoint}",
+                    headers=self.headers,
+                    timeout=30,
+                    **kwargs
+                )
+                
+                if response.status_code == 429:
+                    try:
+                        error_data = response.json()
+                        retry_after = float(error_data.get('wait', 60))
+                    except:
+                        retry_after = float(response.headers.get('Retry-After', 60))
+                    
+                    st.warning(f"⏳ Limit API. Czekam {retry_after:.0f}s...")
+                    time.sleep(retry_after + random.uniform(1, 3))
+                    continue
+                    
+                if response.status_code in [200, 201]:
+                    self.request_history.append(time.time())
+                    result = response.json()
+                    
+                    # Cache dla GET requestów
+                    if cache_key:
+                        self.cache[cache_key] = result
+                    
+                    return result
+                else:
+                    st.error(f"Błąd API {response.status_code}: {response.text}")
+                    return {}
+                
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    st.error(f"Błąd połączenia: {str(e)}")
+                    return {}
+                delay = backoff_factor ** attempt + random.uniform(0.5, 1.5)
+                time.sleep(delay)
+                
+        return {}
 
     def search_people_with_emails(self, company_url: str, titles: List[str], exclude_titles: List[str]) -> List[Dict]:
-        """Optymalizowane wyszukiwanie z batchowaniem i dwuetapowym procesem"""
+        """Zoptymalizowane wyszukiwanie osób z weryfikacją domeny emaila"""
         try:
             valid_contacts = []
+            company_domain = self._extract_domain(company_url)
             
             # ETAP 1: Wyszukiwanie po stanowiskach (wszystkie tytuły w jednym zapytaniu)
             st.info("🔍 Etap 1: Wyszukiwanie po stanowiskach...")
             title_results = self._search_optimized(company_url, "current_title", titles, exclude_titles)
             
             # Sprawdź emaile dla wyników z stanowisk
-            for person in title_results[:15]:  # Ogranicz do 15 wyników dla optymalizacji
-                if len(valid_contacts) >= 5:
+            for person in title_results:
+                if len(valid_contacts) >= 3:  # Zmiana: tylko 3 kontakty
                     break
                     
-                details = self.lookup_person_details(person['id'])
+                contact_with_email = self._get_person_with_verified_email(person, company_domain)
                 
-                if details.get('email') and details.get('smtp_valid') != 'invalid':
-                    # Połącz dane z search i lookup
-                    combined_contact = {**person, **details}
-                    valid_contacts.append(combined_contact)
-                    st.success(f"✅ Znaleziono kontakt przez stanowisko: {details.get('name')} - {details.get('title')} | {details.get('email')} (Grade: {details.get('email_grade', 'N/A')}, SMTP: {details.get('smtp_valid', 'N/A')})")
+                if contact_with_email:
+                    valid_contacts.append(contact_with_email)
+                    st.success(f"✅ Znaleziono kontakt przez stanowisko: {contact_with_email.get('name')} - {contact_with_email.get('title')} | {contact_with_email.get('email')} (Grade: {contact_with_email.get('email_grade', 'N/A')}, SMTP: {contact_with_email.get('smtp_valid', 'N/A')})")
             
-            # ETAP 2: Jeśli mniej niż 5 kontaktów, szukaj po skills
-            if len(valid_contacts) < 5:
+            # ETAP 2: Jeśli mniej niż 3 kontaktów, szukaj po skills
+            if len(valid_contacts) < 3:
                 st.info(f"🎯 Etap 2: Znaleziono {len(valid_contacts)} kontaktów. Rozszerzam wyszukiwanie o umiejętności...")
                 skill_results = self._search_optimized(company_url, "skills", titles, exclude_titles)
                 
                 # Sprawdź emaile dla wyników z skills (pomijając już znalezione)
                 existing_ids = {contact.get('id') for contact in valid_contacts if 'id' in contact}
                 
-                for person in skill_results[:15]:  # Ogranicz do 15 wyników
-                    if len(valid_contacts) >= 5:
+                for person in skill_results:
+                    if len(valid_contacts) >= 3:  # Zmiana: tylko 3 kontakty
                         break
                     
                     # Pomiń jeśli już mamy tę osobę
                     if person['id'] in existing_ids:
                         continue
                         
-                    details = self.lookup_person_details(person['id'])
+                    contact_with_email = self._get_person_with_verified_email(person, company_domain)
                     
-                    if details.get('email') and details.get('smtp_valid') != 'invalid':
-                        combined_contact = {**person, **details}
-                        valid_contacts.append(combined_contact)
-                        st.success(f"✅ Znaleziono kontakt przez umiejętności: {details.get('name')} - {details.get('title')} | {details.get('email')} (Grade: {details.get('email_grade', 'N/A')}, SMTP: {details.get('smtp_valid', 'N/A')})")
+                    if contact_with_email:
+                        valid_contacts.append(contact_with_email)
+                        st.success(f"✅ Znaleziono kontakt przez umiejętności: {contact_with_email.get('name')} - {contact_with_email.get('title')} | {contact_with_email.get('email')} (Grade: {contact_with_email.get('email_grade', 'N/A')}, SMTP: {contact_with_email.get('smtp_valid', 'N/A')})")
             
             st.info(f"📊 Łącznie znaleziono {len(valid_contacts)} kontaktów z prawidłowymi emailami")
-            return valid_contacts[:5]
+            return valid_contacts[:3]  # Zmiana: maksymalnie 3 kontakty
             
         except Exception as e:
             st.error(f"Błąd wyszukiwania: {str(e)}")
             return []
 
-    def _search_optimized(self, company_url: str, field: str, values: List[str], exclude_values: List[str]) -> List[Dict]:
-        """Optymalizowane wyszukiwanie z batchowaniem wszystkich tytułów"""
+    def _get_person_with_verified_email(self, person: Dict, company_domain: str) -> Dict:
+        """Pobierz dane osoby i zweryfikuj domenę emaila"""
         try:
-            self._rate_limit_check()
+            # Sprawdź czy już mamy email w cache
+            person_id = person['id']
+            if person_id in self.email_cache:
+                cached_result = self.email_cache[person_id]
+                if cached_result.get('email'):
+                    email_domain = self._extract_domain(cached_result['email'])
+                    if email_domain == company_domain:
+                        return {**person, **cached_result}
+                return None
             
+            # Pobierz szczegóły osoby
+            details = self.lookup_person_details(person_id)
+            
+            # Cache wynik
+            self.email_cache[person_id] = details
+            
+            if not details.get('email') or details.get('smtp_valid') == 'invalid':
+                return None
+            
+            # Weryfikacja domeny emaila
+            email_domain = self._extract_domain(details['email'])
+            if email_domain != company_domain:
+                st.info(f"⚠️ Email {details['email']} ma inną domenę ({email_domain}) niż firma ({company_domain}) - pomijam")
+                return None
+            
+            # Połącz dane
+            return {**person, **details}
+            
+        except Exception as e:
+            st.error(f"Błąd weryfikacji emaila: {str(e)}")
+            return None
+
+    def _search_optimized(self, company_url: str, field: str, values: List[str], exclude_values: List[str]) -> List[Dict]:
+        """Zoptymalizowane wyszukiwanie z minimalnym zużyciem tokenów"""
+        try:
             if not company_url.startswith(('http://', 'https://')):
                 company_url = f'https://{company_url}'
             
@@ -123,14 +218,15 @@ class RocketReachAPI:
             if not clean_values:
                 return []
             
-            # Przygotuj payload z wszystkimi tytułami naraz
+            # Przygotuj payload z wszystkimi tytułami naraz - OPTYMALIZACJA TOKENÓW
             payload = {
                 "query": {
                     "company_domain": [company_url],
                     field: clean_values  # Wszystkie tytuły w jednym zapytaniu
                 },
                 "start": 1,
-                "page_size": 50  # Maksymalny rozmiar strony zgodnie z dokumentacją
+                "page_size": 25,  # Zmniejszono z 50 do 25 dla optymalizacji
+                "fields": ["id", "name", "current_title", "current_employer", "linkedin_url", "skills"]  # Tylko potrzebne pola
             }
             
             # Dodaj wykluczenia jeśli istnieją
@@ -138,87 +234,56 @@ class RocketReachAPI:
                 exclude_field = f"exclude_{field}" if field != "skills" else "exclude_current_title"
                 payload["query"][exclude_field] = clean_exclude
             
-            max_retries = 3
-            retry_count = 0
+            data = self._make_request("POST", "/api/v2/person/search", json=payload)
             
-            while retry_count < max_retries:
-                response = requests.post(
-                    f"{self.base_url}/api/v2/person/search",
-                    headers=self.headers,
-                    json=payload
-                )
-                
-                if self._handle_rate_limit(response):
-                    retry_count += 1
-                    continue
-                
-                elif response.status_code == 201:
-                    data = response.json()
-                    results = []
-                    
-                    for person in data.get('profiles', []):
-                        # Dodatkowe filtrowanie po stronie klienta dla pewności
-                        if field == "current_title":
-                            check_value = person.get('current_title', '').lower()
-                        elif field == "skills":
-                            check_value = ' '.join(person.get('skills', [])).lower()
-                        else:
-                            check_value = str(person.get(field, '')).lower()
-                        
-                        # Sprawdź wykluczenia
-                        if clean_exclude and any(excl.lower() in check_value for excl in clean_exclude):
-                            continue
-                            
-                        results.append({
-                            "id": person.get('id'),
-                            "name": person.get('name'),
-                            "title": person.get('current_title'),
-                            "company": person.get('current_employer'),
-                            "linkedin": person.get('linkedin_url'),
-                            "skills": person.get('skills', [])
-                        })
-                    
-                    return results
-                
+            results = []
+            for person in data.get('profiles', []):
+                # Dodatkowe filtrowanie po stronie klienta
+                if field == "current_title":
+                    check_value = person.get('current_title', '').lower()
+                elif field == "skills":
+                    check_value = ' '.join(person.get('skills', [])).lower()
                 else:
-                    st.error(f"Błąd search API: {response.status_code} - {response.text}")
-                    break
+                    check_value = str(person.get(field, '')).lower()
+                
+                # Sprawdź wykluczenia
+                if clean_exclude and any(excl.lower() in check_value for excl in clean_exclude):
+                    continue
+                    
+                results.append({
+                    "id": person.get('id'),
+                    "name": person.get('name'),
+                    "title": person.get('current_title'),
+                    "company": person.get('current_employer'),
+                    "linkedin": person.get('linkedin_url'),
+                    "skills": person.get('skills', [])
+                })
             
-            return []
+            return results[:10]  # Ogranicz do 10 kandydatów dla optymalizacji
             
         except Exception as e:
             st.error(f"Błąd wyszukiwania po {field}: {str(e)}")
             return []
 
     def lookup_person_details(self, person_id: int) -> Dict:
-        """Optymalizowane pobieranie danych z lepszą obsługą emaili"""
+        """Zoptymalizowane pobieranie szczegółów osoby"""
         try:
-            self._rate_limit_check()
+            # Sprawdź cache
+            if person_id in self.email_cache:
+                return self.email_cache[person_id]
             
-            max_retries = 3
-            retry_count = 0
+            params = {
+                "id": person_id,
+                "lookup_type": "standard",
+                "fields": ["emails", "name", "current_title", "linkedin_url", "current_employer"]  # Tylko potrzebne pola
+            }
             
-            while retry_count < max_retries:
-                response = requests.get(
-                    f"{self.base_url}/api/v2/person/lookup",
-                    headers=self.headers,
-                    params={
-                        "id": person_id,
-                        "lookup_type": "standard"
-                    }
-                )
-                
-                if self._handle_rate_limit(response):
-                    retry_count += 1
-                    continue
-                
-                elif response.status_code == 200:
-                    data = response.json()
-                    return self._process_email_data(data, person_id)
-                
-                else:
-                    st.error(f"Błąd lookup API: {response.status_code} - {response.text}")
-                    break
+            data = self._make_request("GET", "/api/v2/person/lookup", params=params)
+            
+            if data:
+                result = self._process_email_data(data, person_id)
+                self.email_cache[person_id] = result
+                return result
             
             return {}
                 
@@ -227,12 +292,12 @@ class RocketReachAPI:
             return {}
 
     def _process_email_data(self, data: Dict, person_id: int) -> Dict:
-        """Wspólna metoda przetwarzania emaili z hierarchią wyboru"""
+        """Zoptymalizowane przetwarzanie danych emaila"""
         professional_email = ""
         email_grade = ""
         smtp_valid = ""
         
-        # Hierarchia wyboru emaila zgodnie z wymaganiami
+        # Hierarchia wyboru emaila
         if data.get('recommended_professional_email'):
             professional_email = data.get('recommended_professional_email')
             # Znajdź szczegóły dla tego emaila
@@ -378,14 +443,14 @@ def main():
             for i, website in enumerate(websites):
                 status_text.text(f"Analizowanie: {website} ({i+1}/{len(websites)})")
                 
-                # Optymalizowane wyszukiwanie z automatycznym sprawdzaniem emaili
+                # Zoptymalizowane wyszukiwanie z weryfikacją domeny emaila
                 valid_contacts = rr_api.search_people_with_emails(website, job_titles, exclude_titles)
                 
                 result_row = {"Website": website}
                 
                 if not valid_contacts:
                     result_row["Status"] = "Nie znaleziono kontaktów z prawidłowymi emailami"
-                    for j in range(1, 6):
+                    for j in range(1, 4):  # Zmiana: tylko 3 kontakty
                         result_row.update({
                             f"Imię i nazwisko osoby {j}": "",
                             f"Stanowisko osoby {j}": "",
@@ -397,7 +462,7 @@ def main():
                 else:
                     result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z prawidłowymi emailami"
                     
-                    for j, contact in enumerate(valid_contacts[:5], 1):
+                    for j, contact in enumerate(valid_contacts[:3], 1):  # Zmiana: tylko 3 kontakty
                         result_row.update({
                             f"Imię i nazwisko osoby {j}": contact.get('name', ''),
                             f"Stanowisko osoby {j}": contact.get('title', ''),
@@ -408,7 +473,7 @@ def main():
                         })
                     
                     # Wypełnij pozostałe puste kolumny
-                    for j in range(len(valid_contacts) + 1, 6):
+                    for j in range(len(valid_contacts) + 1, 4):  # Zmiana: tylko 3 kontakty
                         result_row.update({
                             f"Imię i nazwisko osoby {j}": "",
                             f"Stanowisko osoby {j}": "",
@@ -421,9 +486,9 @@ def main():
                 results.append(result_row)
                 progress_bar.progress((i + 1) / len(websites))
                 
-                # Dodaj opóźnienie między firmami dla dodatkowej ostrożności
-                if i < len(websites) - 1:  # Nie czekaj po ostatniej firmie
-                    time.sleep(random.uniform(2, 4))
+                # Opóźnienie między firmami dla stabilności API
+                if i < len(websites) - 1:
+                    time.sleep(random.uniform(1, 2))
             
             status_text.text("✅ Analiza zakończona!")
             
@@ -435,7 +500,7 @@ def main():
             # Statystyki
             st.subheader("📊 Statystyki")
             total_contacts = sum(1 for result in results 
-                               for j in range(1, 6) 
+                               for j in range(1, 4)  # Zmiana: tylko 3 kontakty
                                if result.get(f"Email osoby {j}"))
             
             col1, col2, col3 = st.columns(3)
