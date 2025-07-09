@@ -5,6 +5,7 @@ import time
 import random
 import re
 from typing import List, Dict
+from urllib.parse import urlparse
 
 # Sprawdź czy openpyxl jest zainstalowane
 try:
@@ -18,9 +19,17 @@ except ImportError:
 
 import io
 
+def extract_domain(url: str) -> str:
+    """Wyciąga czystą domenę z URL"""
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    netloc = urlparse(url).netloc.lower()
+    return netloc[4:] if netloc.startswith("www.") else netloc
+
 class RocketReachAPI:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, webhook_id: str = None):
         self.api_key = api_key
+        self.webhook_id = webhook_id
         self.base_url = "https://api.rocketreach.co"
         self.headers = {
             "Api-Key": api_key,
@@ -56,53 +65,31 @@ class RocketReachAPI:
             return True
         return False
 
-    def search_people_with_emails(self, company_url: str, titles: List[str], exclude_titles: List[str]) -> List[Dict]:
-        """Optymalizowane wyszukiwanie z batchowaniem i dwuetapowym procesem"""
+    def search_people_profiles(self, company_url: str, titles: List[str], exclude_titles: List[str]) -> List[Dict]:
+        """Wyszukaj profile bez lookupów - zwraca tylko podstawowe dane"""
         try:
-            valid_contacts = []
+            all_results = []
             
-            # ETAP 1: Wyszukiwanie po stanowiskach (wszystkie tytuły w jednym zapytaniu)
+            # ETAP 1: Wyszukiwanie po stanowiskach
             st.info("🔍 Etap 1: Wyszukiwanie po stanowiskach...")
             title_results = self._search_optimized(company_url, "current_title", titles, exclude_titles)
+            all_results.extend(title_results[:10])
             
-            # Sprawdź emaile dla wyników z stanowisk
-            for person in title_results[:15]:  # Ogranicz do 15 wyników dla optymalizacji
-                if len(valid_contacts) >= 5:
-                    break
-                    
-                details = self.lookup_person_details(person['id'])
-                
-                if details.get('email') and details.get('smtp_valid') != 'invalid':
-                    # Połącz dane z search i lookup
-                    combined_contact = {**person, **details}
-                    valid_contacts.append(combined_contact)
-                    st.success(f"✅ Znaleziono kontakt przez stanowisko: {details.get('name')} - {details.get('title')} | {details.get('email')} (Grade: {details.get('email_grade', 'N/A')}, SMTP: {details.get('smtp_valid', 'N/A')})")
-            
-            # ETAP 2: Jeśli mniej niż 5 kontaktów, szukaj po skills
-            if len(valid_contacts) < 5:
-                st.info(f"🎯 Etap 2: Znaleziono {len(valid_contacts)} kontaktów. Rozszerzam wyszukiwanie o umiejętności...")
+            # ETAP 2: Jeśli mało wyników, szukaj po skills
+            if len(all_results) < 10:
+                st.info(f"🎯 Etap 2: Znaleziono {len(all_results)} profili. Rozszerzam wyszukiwanie o umiejętności...")
                 skill_results = self._search_optimized(company_url, "skills", titles, exclude_titles)
                 
-                # Sprawdź emaile dla wyników z skills (pomijając już znalezione)
-                existing_ids = {contact.get('id') for contact in valid_contacts if 'id' in contact}
-                
-                for person in skill_results[:15]:  # Ogranicz do 15 wyników
-                    if len(valid_contacts) >= 5:
-                        break
-                    
-                    # Pomiń jeśli już mamy tę osobę
-                    if person['id'] in existing_ids:
-                        continue
-                        
-                    details = self.lookup_person_details(person['id'])
-                    
-                    if details.get('email') and details.get('smtp_valid') != 'invalid':
-                        combined_contact = {**person, **details}
-                        valid_contacts.append(combined_contact)
-                        st.success(f"✅ Znaleziono kontakt przez umiejętności: {details.get('name')} - {details.get('title')} | {details.get('email')} (Grade: {details.get('email_grade', 'N/A')}, SMTP: {details.get('smtp_valid', 'N/A')})")
+                # Dodaj tylko unikalne wyniki
+                existing_ids = {result['id'] for result in all_results}
+                for result in skill_results:
+                    if result['id'] not in existing_ids:
+                        all_results.append(result)
+                        if len(all_results) >= 10:
+                            break
             
-            st.info(f"📊 Łącznie znaleziono {len(valid_contacts)} kontaktów z prawidłowymi emailami")
-            return valid_contacts[:5]
+            st.info(f"📊 Znaleziono {len(all_results)} profili do sprawdzenia")
+            return all_results[:5]  # Zwróć maksymalnie 5 profili
             
         except Exception as e:
             st.error(f"Błąd wyszukiwania: {str(e)}")
@@ -113,8 +100,7 @@ class RocketReachAPI:
         try:
             self._rate_limit_check()
             
-            if not company_url.startswith(('http://', 'https://')):
-                company_url = f'https://{company_url}'
+            domain = extract_domain(company_url)
             
             # Filtruj puste wartości
             clean_values = [v.strip() for v in values if v.strip()]
@@ -126,11 +112,12 @@ class RocketReachAPI:
             # Przygotuj payload z wszystkimi tytułami naraz
             payload = {
                 "query": {
-                    "company_domain": [company_url],
+                    "company_domain": [domain],
                     field: clean_values  # Wszystkie tytuły w jednym zapytaniu
                 },
                 "start": 1,
-                "page_size": 50  # Maksymalny rozmiar strony zgodnie z dokumentacją
+                "page_size": 25,
+                "fields": ["id", "name", "current_title", "current_employer", "linkedin_url", "skills"]
             }
             
             # Dodaj wykluczenia jeśli istnieją
@@ -157,7 +144,7 @@ class RocketReachAPI:
                     results = []
                     
                     for person in data.get('profiles', []):
-                        # Dodatkowe filtrowanie po stronie klienta dla pewności
+                        # Dodatkowe filtrowanie po stronie klienta
                         if field == "current_title":
                             check_value = person.get('current_title', '').lower()
                         elif field == "skills":
@@ -190,37 +177,60 @@ class RocketReachAPI:
             st.error(f"Błąd wyszukiwania po {field}: {str(e)}")
             return []
 
-    def lookup_person_details(self, person_id: int) -> Dict:
-        """Optymalizowane pobieranie danych z lepszą obsługą emaili"""
+    def bulk_lookup(self, ids: List[int]):
+        """Wywołaj bulk lookup z webhookiem"""
         try:
             self._rate_limit_check()
             
-            max_retries = 3
-            retry_count = 0
+            payload = {
+                "profiles": [{"id": pid} for pid in ids],
+                "lookup_type": "standard"
+            }
             
-            while retry_count < max_retries:
-                response = requests.get(
-                    f"{self.base_url}/api/v2/person/lookup",
-                    headers=self.headers,
-                    params={
-                        "id": person_id,
-                        "lookup_type": "standard"
-                    }
-                )
-                
-                if self._handle_rate_limit(response):
-                    retry_count += 1
-                    continue
-                
-                elif response.status_code == 200:
-                    data = response.json()
-                    return self._process_email_data(data, person_id)
-                
+            if self.webhook_id:
+                payload["webhook_id"] = self.webhook_id
+            
+            response = requests.post(
+                f"{self.base_url}/api/v2/person/bulk-lookup",
+                headers=self.headers,
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                if self.webhook_id:
+                    st.success("🔔 Bulk lookup wysłany, wyniki przyjdą na webhook")
                 else:
-                    st.error(f"Błąd lookup API: {response.status_code} - {response.text}")
-                    break
-            
+                    st.info("📋 Bulk lookup wykonany synchronicznie")
+                return response.json()
+            else:
+                st.error(f"Bulk lookup error {response.status_code}: {response.text}")
+                return {}
+                
+        except Exception as e:
+            st.error(f"Błąd bulk lookup: {str(e)}")
             return {}
+
+    # Zachowaj oryginalną metodę dla fallback
+    def lookup_person_details(self, person_id: int) -> Dict:
+        """Pojedynczy lookup - używany jako fallback gdy brak webhook"""
+        try:
+            self._rate_limit_check()
+            
+            response = requests.get(
+                f"{self.base_url}/api/v2/person/lookup",
+                headers=self.headers,
+                params={
+                    "id": person_id,
+                    "lookup_type": "standard"
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return self._process_email_data(data, person_id)
+            else:
+                st.error(f"Błąd lookup API: {response.status_code}")
+                return {}
                 
         except Exception as e:
             st.error(f"Błąd pobierania szczegółów: {str(e)}")
@@ -232,10 +242,9 @@ class RocketReachAPI:
         email_grade = ""
         smtp_valid = ""
         
-        # Hierarchia wyboru emaila zgodnie z wymaganiami
+        # Hierarchia wyboru emaila
         if data.get('recommended_professional_email'):
             professional_email = data.get('recommended_professional_email')
-            # Znajdź szczegóły dla tego emaila
             for email_obj in data.get('emails', []):
                 if email_obj.get('email') == professional_email:
                     email_grade = email_obj.get('grade', '')
@@ -244,7 +253,6 @@ class RocketReachAPI:
         
         elif data.get('current_work_email'):
             professional_email = data.get('current_work_email')
-            # Znajdź szczegóły dla tego emaila
             for email_obj in data.get('emails', []):
                 if email_obj.get('email') == professional_email:
                     email_grade = email_obj.get('grade', '')
@@ -252,7 +260,6 @@ class RocketReachAPI:
                     break
         
         elif 'emails' in data:
-            # Znajdź najlepszy email zawodowy
             valid_professional_emails = [
                 email_obj for email_obj in data['emails']
                 if (email_obj.get('type') == 'professional' and 
@@ -260,7 +267,6 @@ class RocketReachAPI:
             ]
             
             if valid_professional_emails:
-                # Sortuj według grade
                 grade_order = {'A': 1, 'A-': 2, 'B': 3, 'B-': 4, 'C': 5, 'D': 6, 'F': 7}
                 valid_professional_emails.sort(
                     key=lambda x: grade_order.get(x.get('grade', 'F'), 8)
@@ -271,7 +277,6 @@ class RocketReachAPI:
                 email_grade = best_email.get('grade', '')
                 smtp_valid = best_email.get('smtp_valid', '')
         
-        # Sprawdź czy email ma smtp_valid = 'invalid'
         if smtp_valid == 'invalid':
             return {}
         
@@ -313,6 +318,17 @@ def main():
             type="password",
             help="Wprowadź swój klucz API z RocketReach"
         )
+        
+        # Pole do wprowadzania Webhook ID
+        webhook_id = st.text_input(
+            "Webhook ID (opcjonalnie)",
+            help="ID webhook z panelu RocketReach dla asynchronicznych wyników"
+        )
+        
+        if webhook_id:
+            st.success("🔔 Webhook włączony - wyniki będą wysyłane asynchronicznie")
+        else:
+            st.info("📋 Tryb synchroniczny - wyniki w czasie rzeczywistym")
         
         st.subheader("Stanowiska do wyszukiwania")
         job_titles_input = st.text_area(
@@ -370,92 +386,140 @@ def main():
     # Przycisk wyszukiwania
     if websites and api_key:
         if st.button("🚀 Rozpocznij wyszukiwanie", type="primary"):
-            rr_api = RocketReachAPI(api_key)
-            results = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            rr_api = RocketReachAPI(api_key, webhook_id)
             
-            for i, website in enumerate(websites):
-                status_text.text(f"Analizowanie: {website} ({i+1}/{len(websites)})")
+            if webhook_id:
+                # Tryb webhook - tylko wyszukiwanie i bulk lookup
+                st.info("🔔 Tryb webhook - wyniki będą wysyłane na Twój endpoint")
                 
-                # Optymalizowane wyszukiwanie z automatycznym sprawdzaniem emaili
-                valid_contacts = rr_api.search_people_with_emails(website, job_titles, exclude_titles)
-                
-                result_row = {"Website": website}
-                
-                if not valid_contacts:
-                    result_row["Status"] = "Nie znaleziono kontaktów z prawidłowymi emailami"
-                    for j in range(1, 6):
-                        result_row.update({
-                            f"Imię i nazwisko osoby {j}": "",
-                            f"Stanowisko osoby {j}": "",
-                            f"Email osoby {j}": "",
-                            f"LinkedIn URL osoby {j}": "",
-                            f"Grade emaila osoby {j}": "",
-                            f"SMTP Valid osoby {j}": ""
-                        })
-                else:
-                    result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z prawidłowymi emailami"
+                for i, website in enumerate(websites):
+                    st.write(f"🔍 Analizowanie: {website} ({i+1}/{len(websites)})")
                     
-                    for j, contact in enumerate(valid_contacts[:5], 1):
-                        result_row.update({
-                            f"Imię i nazwisko osoby {j}": contact.get('name', ''),
-                            f"Stanowisko osoby {j}": contact.get('title', ''),
-                            f"Email osoby {j}": contact.get('email', ''),
-                            f"LinkedIn URL osoby {j}": contact.get('linkedin', ''),
-                            f"Grade emaila osoby {j}": contact.get('email_grade', ''),
-                            f"SMTP Valid osoby {j}": contact.get('smtp_valid', '')
-                        })
+                    # Znajdź profile
+                    profiles = rr_api.search_people_profiles(website, job_titles, exclude_titles)
                     
-                    # Wypełnij pozostałe puste kolumny
-                    for j in range(len(valid_contacts) + 1, 6):
-                        result_row.update({
-                            f"Imię i nazwisko osoby {j}": "",
-                            f"Stanowisko osoby {j}": "",
-                            f"Email osoby {j}": "",
-                            f"LinkedIn URL osoby {j}": "",
-                            f"Grade emaila osoby {j}": "",
-                            f"SMTP Valid osoby {j}": ""
-                        })
+                    if profiles:
+                        ids = [p["id"] for p in profiles[:5]]
+                        st.write(f"📋 Znaleziono {len(profiles)} profili, wysyłam {len(ids)} do bulk lookup")
+                        rr_api.bulk_lookup(ids)
+                    else:
+                        st.write("❌ Brak profili do sprawdzenia")
+                    
+                    time.sleep(random.uniform(1, 2))
                 
-                results.append(result_row)
-                progress_bar.progress((i + 1) / len(websites))
+                st.success("📬 Wszystkie zapytania wysłane. Sprawdź swój webhook endpoint!")
                 
-                # Dodaj opóźnienie między firmami dla dodatkowej ostrożności
-                if i < len(websites) - 1:  # Nie czekaj po ostatniej firmie
-                    time.sleep(random.uniform(2, 4))
-            
-            status_text.text("✅ Analiza zakończona!")
-            
-            # Wyświetl wyniki
-            st.subheader("📋 Wyniki wyszukiwania")
-            results_df = pd.DataFrame(results)
-            st.dataframe(results_df, use_container_width=True)
-            
-            # Statystyki
-            st.subheader("📊 Statystyki")
-            total_contacts = sum(1 for result in results 
-                               for j in range(1, 6) 
-                               if result.get(f"Email osoby {j}"))
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Przeanalizowane firmy", len(websites))
-            with col2:
-                st.metric("Znalezione kontakty", total_contacts)
-            with col3:
-                firms_with_contacts = sum(1 for result in results 
-                                        if "kontakt" in result["Status"] and "Nie znaleziono" not in result["Status"])
-                st.metric("Firmy z kontaktami", firms_with_contacts)
-            
-            # Download button
-            excel_data = create_excel_file(results_df)
-            st.download_button(
-                "📥 Pobierz wyniki jako Excel",
-                data=excel_data,
-                file_name="kontakty_inwestorzy.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            else:
+                # Tryb synchroniczny - oryginalny kod
+                results = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                for i, website in enumerate(websites):
+                    status_text.text(f"Analizowanie: {website} ({i+1}/{len(websites)})")
+                    
+                    # Znajdź profile
+                    profiles = rr_api.search_people_profiles(website, job_titles, exclude_titles)
+                    
+                    result_row = {"Website": website}
+                    
+                    if not profiles:
+                        result_row["Status"] = "Nie znaleziono profili"
+                        for j in range(1, 6):
+                            result_row.update({
+                                f"Imię i nazwisko osoby {j}": "",
+                                f"Stanowisko osoby {j}": "",
+                                f"Email osoby {j}": "",
+                                f"LinkedIn URL osoby {j}": "",
+                                f"Grade emaila osoby {j}": "",
+                                f"SMTP Valid osoby {j}": ""
+                            })
+                    else:
+                        valid_contacts = []
+                        
+                        # Synchroniczne lookupy
+                        for person in profiles:
+                            details = rr_api.lookup_person_details(person['id'])
+                            time.sleep(1)  # Rate limiting
+                            
+                            if details.get('email') and details.get('smtp_valid') != 'invalid':
+                                combined_contact = {**person, **details}
+                                valid_contacts.append(combined_contact)
+                                st.success(f"✅ {details.get('name')} - {details.get('email')} (Grade: {details.get('email_grade', 'N/A')})")
+                        
+                        if not valid_contacts:
+                            result_row["Status"] = "Nie znaleziono kontaktów z prawidłowymi emailami"
+                            for j in range(1, 6):
+                                result_row.update({
+                                    f"Imię i nazwisko osoby {j}": "",
+                                    f"Stanowisko osoby {j}": "",
+                                    f"Email osoby {j}": "",
+                                    f"LinkedIn URL osoby {j}": "",
+                                    f"Grade emaila osoby {j}": "",
+                                    f"SMTP Valid osoby {j}": ""
+                                })
+                        else:
+                            result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z prawidłowymi emailami"
+                            
+                            for j, contact in enumerate(valid_contacts[:5], 1):
+                                result_row.update({
+                                    f"Imię i nazwisko osoby {j}": contact.get('name', ''),
+                                    f"Stanowisko osoby {j}": contact.get('title', ''),
+                                    f"Email osoby {j}": contact.get('email', ''),
+                                    f"LinkedIn URL osoby {j}": contact.get('linkedin', ''),
+                                    f"Grade emaila osoby {j}": contact.get('email_grade', ''),
+                                    f"SMTP Valid osoby {j}": contact.get('smtp_valid', '')
+                                })
+                            
+                            # Wypełnij pozostałe puste kolumny
+                            for j in range(len(valid_contacts) + 1, 6):
+                                result_row.update({
+                                    f"Imię i nazwisko osoby {j}": "",
+                                    f"Stanowisko osoby {j}": "",
+                                    f"Email osoby {j}": "",
+                                    f"LinkedIn URL osoby {j}": "",
+                                    f"Grade emaila osoby {j}": "",
+                                    f"SMTP Valid osoby {j}": ""
+                                })
+                    
+                    results.append(result_row)
+                    progress_bar.progress((i + 1) / len(websites))
+                    
+                    # Opóźnienie między firmami
+                    if i < len(websites) - 1:
+                        time.sleep(random.uniform(2, 4))
+                
+                status_text.text("✅ Analiza zakończona!")
+                
+                # Wyświetl wyniki
+                st.subheader("📋 Wyniki wyszukiwania")
+                results_df = pd.DataFrame(results)
+                st.dataframe(results_df, use_container_width=True)
+                
+                # Statystyki
+                st.subheader("📊 Statystyki")
+                total_contacts = sum(1 for result in results 
+                                   for j in range(1, 6) 
+                                   if result.get(f"Email osoby {j}"))
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Przeanalizowane firmy", len(websites))
+                with col2:
+                    st.metric("Znalezione kontakty", total_contacts)
+                with col3:
+                    firms_with_contacts = sum(1 for result in results 
+                                            if "kontakt" in result["Status"] and "Nie znaleziono" not in result["Status"])
+                    st.metric("Firmy z kontaktami", firms_with_contacts)
+                
+                # Download button
+                excel_data = create_excel_file(results_df)
+                st.download_button(
+                    "📥 Pobierz wyniki jako Excel",
+                    data=excel_data,
+                    file_name="kontakty_inwestorzy.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
     
     elif not api_key:
         st.warning("⚠️ Wprowadź klucz API RocketReach w panelu bocznym")
