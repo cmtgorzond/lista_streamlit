@@ -75,10 +75,10 @@ class RocketReachAPI:
             # ETAP 1: Wyszukiwanie po stanowiskach
             st.info("🔍 Etap 1: Wyszukiwanie po stanowiskach...")
             title_results = self._search_optimized(company_url, "current_title", titles, exclude_titles)
-            all_results.extend(title_results[:10])
+            all_results.extend(title_results[:15])
             
             # ETAP 2: Jeśli mało wyników, szukaj po skills
-            if len(all_results) < 10:
+            if len(all_results) < 15:
                 st.info(f"🎯 Etap 2: Znaleziono {len(all_results)} profili. Rozszerzam wyszukiwanie o umiejętności...")
                 skill_results = self._search_optimized(company_url, "skills", titles, exclude_titles)
                 
@@ -87,11 +87,11 @@ class RocketReachAPI:
                 for result in skill_results:
                     if result['id'] not in existing_ids:
                         all_results.append(result)
-                        if len(all_results) >= 10:
+                        if len(all_results) >= 15:
                             break
             
             st.info(f"📊 Znaleziono {len(all_results)} profili do sprawdzenia")
-            return all_results[:5]  # Zwróć maksymalnie 5 profili
+            return all_results[:10]  # Zwróć maksymalnie 10 profili
             
         except Exception as e:
             st.error(f"Błąd wyszukiwania: {str(e)}")
@@ -118,7 +118,7 @@ class RocketReachAPI:
                     field: clean_values  # Wszystkie tytuły w jednym zapytaniu
                 },
                 "start": 1,
-                "page_size": 25,
+                "page_size": 50,  # Zwiększono dla lepszych wyników
                 "fields": ["id", "name", "current_title", "current_employer", "linkedin_url", "skills"]
             }
             
@@ -180,9 +180,13 @@ class RocketReachAPI:
             st.error(f"Błąd wyszukiwania po {field}: {str(e)}")
             return []
 
-    def bulklookup(self, ids: List[int]):
-        """Wywołaj bulk lookup z webhookiem - POPRAWIONY ENDPOINT Z PODKREŚLENIEM"""
+    def bulk_lookup(self, ids: List[int]):
+        """Wywołaj bulk lookup z webhookiem - POPRAWIONY ENDPOINT"""
         try:
+            if len(ids) < 10:
+                st.error("❌ Bulk Lookup wymaga minimum 10 profili. Znaleziono tylko " + str(len(ids)) + " profili.")
+                return
+                
             self._rate_limit_check()
             
             payload = {
@@ -194,7 +198,7 @@ class RocketReachAPI:
                 payload["webhook_id"] = self.webhook_id
             
             response = requests.post(
-                f"{self.base_url}/api/v2/person/bulklookup",  # POPRAWIONY ENDPOINT Z PODKREŚLENIEM
+                f"{self.base_url}/api/v2/bulkLookup",  # POPRAWIONY ENDPOINT
                 headers=self.headers,
                 json=payload,
                 timeout=30
@@ -404,14 +408,14 @@ def main():
                     profiles = rr_api.search_people_profiles(website, job_titles, exclude_titles)
                     
                     if profiles:
-                        ids = [p["id"] for p in profiles[:5]]
+                        ids = [p["id"] for p in profiles]
                         st.write(f"📋 Znaleziono {len(profiles)} profili, wysyłam {len(ids)} do bulk lookup")
                         
                         # Wyświetl znalezione profile
-                        for profile in profiles[:5]:
+                        for profile in profiles:
                             st.write(f"• {profile.get('name', 'N/A')} - {profile.get('title', 'N/A')} ({profile.get('company', 'N/A')})")
                         
-                        rr_api.bulklookup(ids)
+                        rr_api.bulk_lookup(ids)
                     else:
                         st.write("❌ Brak profili do sprawdzenia")
                     
@@ -436,7 +440,7 @@ def main():
                     
                     if not profiles:
                         result_row["Status"] = "Nie znaleziono profili"
-                        for j in range(1, 6):
+                        for j in range(1, 4):  # Zmiana: tylko 3 kontakty
                             result_row.update({
                                 f"Imię i nazwisko osoby {j}": "",
                                 f"Stanowisko osoby {j}": "",
@@ -449,7 +453,7 @@ def main():
                         valid_contacts = []
                         
                         # Synchroniczne lookupy
-                        for person in profiles:
+                        for person in profiles[:3]:  # Tylko 3 osoby
                             details = rr_api.lookup_person_details(person['id'])
                             time.sleep(1)  # Rate limiting
                             
@@ -460,7 +464,7 @@ def main():
                         
                         if not valid_contacts:
                             result_row["Status"] = "Nie znaleziono kontaktów z prawidłowymi emailami"
-                            for j in range(1, 6):
+                            for j in range(1, 4):  # Zmiana: tylko 3 kontakty
                                 result_row.update({
                                     f"Imię i nazwisko osoby {j}": "",
                                     f"Stanowisko osoby {j}": "",
@@ -472,7 +476,7 @@ def main():
                         else:
                             result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z prawidłowymi emailami"
                             
-                            for j, contact in enumerate(valid_contacts[:5], 1):
+                            for j, contact in enumerate(valid_contacts[:3], 1):  # Zmiana: tylko 3 kontakty
                                 result_row.update({
                                     f"Imię i nazwisko osoby {j}": contact.get('name', ''),
                                     f"Stanowisko osoby {j}": contact.get('title', ''),
@@ -483,7 +487,7 @@ def main():
                                 })
                             
                             # Wypełnij pozostałe puste kolumny
-                            for j in range(len(valid_contacts) + 1, 6):
+                            for j in range(len(valid_contacts) + 1, 4):  # Zmiana: tylko 3 kontakty
                                 result_row.update({
                                     f"Imię i nazwisko osoby {j}": "",
                                     f"Stanowisko osoby {j}": "",
@@ -510,7 +514,7 @@ def main():
                 # Statystyki
                 st.subheader("📊 Statystyki")
                 total_contacts = sum(1 for result in results 
-                                   for j in range(1, 6) 
+                                   for j in range(1, 4)  # Zmiana: tylko 3 kontakty
                                    if result.get(f"Email osoby {j}"))
                 
                 col1, col2, col3 = st.columns(3)
