@@ -4,567 +4,205 @@ import requests
 import time
 import random
 import re
+import io
 from typing import List, Dict
-from urllib.parse import urlparse
 
-# Sprawdź czy openpyxl jest zainstalowane
+# --- Ensure openpyxl for Excel export ---
 try:
     import openpyxl
 except ImportError:
-    st.error("Biblioteka openpyxl nie jest zainstalowana. Instaluję...")
-    import subprocess
-    import sys
     subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
     import openpyxl
 
-import io
-
-def extract_domain(url: str) -> str:
-    """Wyciąga czystą domenę z URL"""
-    if '@' in url:
-        return url.split('@')[1].lower()
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
-    netloc = urlparse(url).netloc.lower()
-    return netloc[4:] if netloc.startswith("www.") else netloc
-
 class RocketReachAPI:
-    def __init__(self, api_key: str, webhook_id: str = None):
+    def __init__(self, api_key: str):
         self.api_key = api_key
-        self.webhook_id = webhook_id
-        self.base_url = "https://api.rocketreach.co"
+        self.base_url = "https://api.rocketreach.co/api/v2"
         self.headers = {
             "Api-Key": api_key,
             "Content-Type": "application/json",
             "accept": "application/json"
         }
-        self.request_timestamps = []
+        self.request_timestamps: List[float] = []
 
     def _rate_limit_check(self):
-        """Zachowaj maksymalnie 5 zapytań na sekundę zgodnie z dokumentacją API"""
         now = time.time()
-        # Usuń stare timestampy (starsze niż 1 sekunda)
+        # keep timestamps within last second
         self.request_timestamps = [t for t in self.request_timestamps if t > now - 1]
-        
         if len(self.request_timestamps) >= 5:
-            sleep_time = 1.0 - (now - self.request_timestamps[0])
+            sleep_time = 1 - (now - self.request_timestamps[0])
             if sleep_time > 0:
-                time.sleep(sleep_time + random.uniform(0.1, 0.3))  # Dodaj losowy jitter
-        
-        self.request_timestamps.append(now)
+                time.sleep(sleep_time + random.uniform(0.1, 0.3))
+        self.request_timestamps.append(time.time())
 
-    def _handle_rate_limit(self, response):
-        """Automatyczna obsługa limitu z wykładniczym backoffem"""
-        if response.status_code == 429:
+    def _handle_rate_limit(self, resp: requests.Response) -> bool:
+        if resp.status_code == 429:
             try:
-                error_data = response.json()
-                retry_after = float(error_data.get('wait', 60))
+                wait = float(resp.json().get("wait", 60))
             except:
-                retry_after = float(response.headers.get('Retry-After', 60))
-            
-            st.warning(f"⏳ Przekroczono limit. Czekam {retry_after:.0f} sekund...")
-            time.sleep(retry_after + random.uniform(1, 3))  # Dodaj losowy jitter
+                wait = float(resp.headers.get("Retry-After", 60))
+            st.warning(f"⏳ Rate limit hit, sleeping {wait:.0f}s…")
+            time.sleep(wait + random.uniform(1, 2))
             return True
         return False
 
-    def search_people_profiles(self, company_url: str, titles: List[str], exclude_titles: List[str]) -> List[Dict]:
-        """Wyszukaj profile bez lookupów - zwraca tylko podstawowe dane"""
-        try:
-            all_results = []
-            
-            # ETAP 1: Wyszukiwanie po stanowiskach
-            st.info("🔍 Etap 1: Wyszukiwanie po stanowiskach...")
-            title_results = self._search_optimized(company_url, "current_title", titles, exclude_titles)
-            all_results.extend(title_results[:15])
-            
-            # ETAP 2: Jeśli mało wyników, szukaj po skills
-            if len(all_results) < 15:
-                st.info(f"🎯 Etap 2: Znaleziono {len(all_results)} profili. Rozszerzam wyszukiwanie o umiejętności...")
-                skill_results = self._search_optimized(company_url, "skills", titles, exclude_titles)
-                
-                # Dodaj tylko unikalne wyniki
-                existing_ids = {result['id'] for result in all_results}
-                for result in skill_results:
-                    if result['id'] not in existing_ids:
-                        all_results.append(result)
-                        if len(all_results) >= 15:
-                            break
-            
-            st.info(f"📊 Znaleziono {len(all_results)} profili do sprawdzenia")
-            return all_results  # Zwróć wszystkie znalezione profile
-            
-        except Exception as e:
-            st.error(f"Błąd wyszukiwania: {str(e)}")
-            return []
-
-    def _search_optimized(self, company_url: str, field: str, values: List[str], exclude_values: List[str]) -> List[Dict]:
-        """Optymalizowane wyszukiwanie z batchowaniem wszystkich tytułów"""
-        try:
-            self._rate_limit_check()
-            
-            domain = extract_domain(company_url)
-            
-            # Filtruj puste wartości
-            clean_values = [v.strip() for v in values if v.strip()]
-            clean_exclude = [v.strip() for v in exclude_values if v.strip()]
-            
-            if not clean_values:
-                return []
-            
-            # Przygotuj payload z wszystkimi tytułami naraz
-            payload = {
-                "query": {
-                    "company_domain": [domain],
-                    field: clean_values  # Wszystkie tytuły w jednym zapytaniu
-                },
-                "start": 1,
-                "page_size": 50,  # Zwiększono dla lepszych wyników
-                "fields": ["id", "name", "current_title", "current_employer", "linkedin_url", "skills"]
-            }
-            
-            # Dodaj wykluczenia jeśli istnieją
-            if clean_exclude:
-                exclude_field = f"exclude_{field}" if field != "skills" else "exclude_current_title"
-                payload["query"][exclude_field] = clean_exclude
-            
-            max_retries = 3
-            retry_count = 0
-            
-            while retry_count < max_retries:
-                response = requests.post(
-                    f"{self.base_url}/api/v2/person/search",
-                    headers=self.headers,
-                    json=payload,
-                    timeout=30
-                )
-                
-                if self._handle_rate_limit(response):
-                    retry_count += 1
-                    continue
-                
-                elif response.status_code == 201:
-                    data = response.json()
-                    results = []
-                    
-                    for person in data.get('profiles', []):
-                        # Dodatkowe filtrowanie po stronie klienta
-                        if field == "current_title":
-                            check_value = person.get('current_title', '').lower()
-                        elif field == "skills":
-                            check_value = ' '.join(person.get('skills', [])).lower()
-                        else:
-                            check_value = str(person.get(field, '')).lower()
-                        
-                        # Sprawdź wykluczenia
-                        if clean_exclude and any(excl.lower() in check_value for excl in clean_exclude):
-                            continue
-                            
-                        results.append({
-                            "id": person.get('id'),
-                            "name": person.get('name'),
-                            "title": person.get('current_title'),
-                            "company": person.get('current_employer'),
-                            "linkedin": person.get('linkedin_url'),
-                            "skills": person.get('skills', [])
-                        })
-                    
-                    return results
-                
-                else:
-                    st.error(f"Błąd search API: {response.status_code} - {response.text}")
-                    break
-            
-            return []
-            
-        except Exception as e:
-            st.error(f"Błąd wyszukiwania po {field}: {str(e)}")
-            return []
-
-    def bulk_lookup(self, profiles: List[Dict]):
-        """Wywołaj bulk lookup z webhookiem - POPRAWIONY ENDPOINT (CamelCase)"""
-        try:
-            if len(profiles) < 10:
-                st.error(f"❌ Bulk Lookup wymaga minimum 10 profili. Znaleziono tylko {len(profiles)} profili.")
-                return
-                
-            self._rate_limit_check()
-            
-            # Buduj queries zgodnie z dokumentacją API
-            queries = []
-            for profile in profiles:
-                if profile.get("linkedin"):  # Preferowane - najwyższa trafność
-                    queries.append({"linkedin_url": profile["linkedin"]})
-                elif profile.get("id"):  # Drugi wybór
-                    queries.append({"profile_id": profile["id"]})
-                elif profile.get("name") and profile.get("company"):  # Fallback
-                    queries.append({
-                        "name": profile["name"],
-                        "current_employer": profile["company"]
-                    })
-            
-            if not queries:
-                st.error("❌ Nie można utworzyć queries - brak wymaganych danych w profilach")
-                return
-            
-            payload = {
-                "queries": queries,  # POPRAWIONY FORMAT
-                "lookup_type": "standard"
-            }
-            
-            if self.webhook_id:
-                payload["webhook_id"] = self.webhook_id
-            
-            response = requests.post(
-                f"{self.base_url}/api/v2/person/bulkLookup",  # POPRAWIONY ENDPOINT - CamelCase
-                headers=self.headers,
-                json=payload,
-                timeout=30
-            )
-            
-            if response.status_code in (200, 201, 202):  # Akceptuj wszystkie kody sukcesu
-                if self.webhook_id:
-                    st.success("🔔 Bulk lookup wysłany, wyniki przyjdą na webhook")
-                else:
-                    st.info("📋 Bulk lookup wykonany synchronicznie")
-                    return response.json()
-            else:
-                st.error(f"Bulk lookup error {response.status_code}: {response.text}")
-                return {}
-                
-        except Exception as e:
-            st.error(f"Błąd bulk lookup: {str(e)}")
-            return {}
-
-    # Zachowaj oryginalną metodę dla fallback (tryb synchroniczny)
-    def lookup_person_details(self, person_id: int) -> Dict:
-        """Pojedynczy lookup - używany jako fallback gdy brak webhook"""
-        try:
-            self._rate_limit_check()
-            
-            response = requests.get(
-                f"{self.base_url}/api/v2/person/lookup",
-                headers=self.headers,
-                params={
-                    "id": person_id,
-                    "lookup_type": "standard"
-                },
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                return self._process_email_data(data, person_id)
-            else:
-                st.error(f"Błąd lookup API: {response.status_code}")
-                return {}
-                
-        except Exception as e:
-            st.error(f"Błąd pobierania szczegółów: {str(e)}")
-            return {}
-
-    def _process_email_data(self, data: Dict, person_id: int) -> Dict:
-        """Wspólna metoda przetwarzania emaili z hierarchią wyboru"""
-        professional_email = ""
-        email_grade = ""
-        smtp_valid = ""
-        
-        # Hierarchia wyboru emaila
-        if data.get('recommended_professional_email'):
-            professional_email = data.get('recommended_professional_email')
-            for email_obj in data.get('emails', []):
-                if email_obj.get('email') == professional_email:
-                    email_grade = email_obj.get('grade', '')
-                    smtp_valid = email_obj.get('smtp_valid', '')
-                    break
-        
-        elif data.get('current_work_email'):
-            professional_email = data.get('current_work_email')
-            for email_obj in data.get('emails', []):
-                if email_obj.get('email') == professional_email:
-                    email_grade = email_obj.get('grade', '')
-                    smtp_valid = email_obj.get('smtp_valid', '')
-                    break
-        
-        elif 'emails' in data:
-            valid_professional_emails = [
-                email_obj for email_obj in data['emails']
-                if (email_obj.get('type') == 'professional' and 
-                    email_obj.get('smtp_valid') != 'invalid')
-            ]
-            
-            if valid_professional_emails:
-                grade_order = {'A': 1, 'A-': 2, 'B': 3, 'B-': 4, 'C': 5, 'D': 6, 'F': 7}
-                valid_professional_emails.sort(
-                    key=lambda x: grade_order.get(x.get('grade', 'F'), 8)
-                )
-                
-                best_email = valid_professional_emails[0]
-                professional_email = best_email.get('email', '')
-                email_grade = best_email.get('grade', '')
-                smtp_valid = best_email.get('smtp_valid', '')
-        
-        if smtp_valid == 'invalid':
-            return {}
-        
-        return {
-            "id": person_id,
-            "name": data.get('name', ''),
-            "title": data.get('current_title', ''),
-            "email": professional_email,
-            "email_grade": email_grade,
-            "smtp_valid": smtp_valid,
-            "linkedin": data.get('linkedin_url', ''),
-            "company": data.get('current_employer', ''),
-            "skills": data.get('skills', [])
+    def search_people(self, domain: str, titles: List[str], exclude: List[str]) -> List[Dict]:
+        self._rate_limit_check()
+        if not domain.startswith(("http://","https://")):
+            domain = "https://" + domain
+        payload = {
+            "query": {
+                "company_domain": [domain],
+                "current_title": [t.strip() for t in titles if t.strip()]
+            },
+            "start": 1,
+            "page_size": 50
         }
+        if exclude:
+            payload["query"]["exclude_current_title"] = [e.strip() for e in exclude if e.strip()]
+        resp = requests.post(f"{self.base_url}/person/search", headers=self.headers, json=payload)
+        if self._handle_rate_limit(resp):
+            return self.search_people(domain, titles, exclude)
+        if resp.status_code != 201:
+            st.error(f"Search error {resp.status_code}: {resp.text}")
+            return []
+        profiles = resp.json().get("profiles", [])
+        # take up to 15 candidates
+        return [{"id": p["id"], "name": p["name"], "title": p["current_title"], "linkedin": p["linkedin_url"]} 
+                for p in profiles[:15]]
 
-def create_excel_file(results_df: pd.DataFrame) -> bytes:
-    """Tworzy plik Excel i zwraca jako bytes"""
-    try:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            results_df.to_excel(writer, index=False, sheet_name='Kontakty')
-        return output.getvalue()
-    except Exception as e:
-        st.error(f"Błąd tworzenia pliku Excel: {str(e)}")
-        return results_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+    def batch_lookup(self, ids: List[int]) -> List[Dict]:
+        """Use bulk lookup for up to 100 IDs at once."""
+        # must send at least 10 IDs per bulk request
+        if len(ids) >= 10:
+            self._rate_limit_check()
+            payload = {"ids": ids[:100]}
+            resp = requests.post(f"{self.base_url}/person/bulk_lookup", headers=self.headers, json=payload)
+            if self._handle_rate_limit(resp):
+                return self.batch_lookup(ids)
+            if resp.status_code != 200:
+                st.error(f"Bulk lookup error {resp.status_code}: {resp.text}")
+                return []
+            return resp.json().get("results", [])
+        # fallback to individual
+        results = []
+        for pid in ids[:3]:
+            details = self.lookup_person(pid)
+            if details:
+                results.append(details)
+        return results
+
+    def lookup_person(self, pid: int) -> Dict:
+        self._rate_limit_check()
+        resp = requests.get(f"{self.base_url}/person/lookup", headers=self.headers, params={"id": pid, "lookup_type": "standard"})
+        if self._handle_rate_limit(resp):
+            return self.lookup_person(pid)
+        if resp.status_code != 200:
+            return {}
+        return resp.json()
+
+    def extract_valid(self, raw: List[Dict]) -> List[Dict]:
+        out = []
+        grade_order = {"A":1,"A-":2,"B":3,"B-":4,"C":5,"D":6,"F":7}
+        for person in raw:
+            email = person.get("recommended_professional_email") or person.get("current_work_email")
+            if not email:
+                # find best professional
+                profs = [e for e in person.get("emails",[]) 
+                         if e.get("type")=="professional" and e.get("smtp_valid")!="invalid"]
+                if not profs: continue
+                profs.sort(key=lambda e: grade_order.get(e.get("grade","F"),99))
+                email, grade, valid = profs[0]["email"], profs[0]["grade"], profs[0]["smtp_valid"]
+            else:
+                # find in emails
+                match = next((e for e in person.get("emails",[]) if e["email"]==email), {})
+                grade, valid = match.get("grade",""), match.get("smtp_valid","")
+            if valid=="invalid":
+                continue
+            out.append({
+                "name": person.get("name"),
+                "title": person.get("current_title"),
+                "email": email,
+                "email_grade": grade,
+                "smtp_valid": valid,
+                "linkedin": person.get("linkedin_url")
+            })
+            if len(out)>=3: 
+                break
+        return out
+
+    def search_with_emails(self, domain: str, titles: List[str], exclude: List[str]) -> List[Dict]:
+        # step 1: search by titles
+        candidates = self.search_people(domain, titles, exclude)
+        ids = [c["id"] for c in candidates]
+        details = self.batch_lookup(ids)
+        valid = self.extract_valid(details)
+        # if less than 3, try by skills
+        if len(valid) < 3:
+            skills = {"skills":[t.strip() for t in titles if t.strip()]}
+            self._rate_limit_check()
+            resp = requests.post(f"{self.base_url}/person/search", headers=self.headers,
+                                 json={"query": {"company_domain":[domain], **skills}, "page_size":50})
+            if resp.status_code==201:
+                skills_ids = [p["id"] for p in resp.json().get("profiles",[])[:15] if p["id"] not in ids]
+                details2 = self.batch_lookup(skills_ids)
+                valid += [v for v in self.extract_valid(details2) if v not in valid]
+        return valid[:3]
+
+def create_excel(results_df: pd.DataFrame) -> bytes:
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as w:
+        results_df.to_excel(w, index=False, sheet_name="Kontakty")
+    return out.getvalue()
 
 def main():
-    st.set_page_config(page_title="🎯 Wyszukiwanie kontaktów do inwestorów", layout="wide")
+    st.set_page_config(page_title="🎯 Wyszukiwarka kontaktów", layout="wide")
     st.title("🎯 Wyszukiwanie kontaktów do inwestorów")
-    st.markdown("Aplikacja do wyszukiwania kontaktów w firmach z zaawansowanymi filtrami")
-    
-    # Sidebar
     with st.sidebar:
-        st.header("⚙️ Konfiguracja")
-        
-        # Pole do wprowadzania klucza API
-        api_key = st.text_input(
-            "RocketReach API Key",
-            type="password",
-            help="Wprowadź swój klucz API z RocketReach"
-        )
-        
-        # Pole do wprowadzania Webhook ID
-        webhook_id = st.text_input(
-            "Webhook ID (opcjonalnie)",
-            help="ID webhook z panelu RocketReach dla asynchronicznych wyników"
-        )
-        
-        if webhook_id:
-            st.success("🔔 Webhook włączony - wyniki będą wysyłane asynchronicznie")
-        else:
-            st.info("📋 Tryb synchroniczny - wyniki w czasie rzeczywistym")
-        
-        st.subheader("Stanowiska do wyszukiwania")
-        job_titles_input = st.text_area(
-            "Nazwy stanowisk (po jednej w linii)",
-            "M&A\nM and A\ncorporate development\nstrategy\nstrategic\ngrowth\nmerger\nacquisition\ndeal\norigination",
-            height=150
-        )
-        job_titles = [title.strip() for title in job_titles_input.split('\n') if title.strip()]
-        
-        st.subheader("Stanowiska do wykluczenia")
-        exclude_titles_input = st.text_area(
-            "Nazwy stanowisk do wykluczenia (po jednej w linii)",
-            "hr\nhuman resources\nmarketing\nsales\ntalent",
-            height=100
-        )
-        exclude_titles = [title.strip() for title in exclude_titles_input.split('\n') if title.strip()]
-
-    # Opcja wyboru źródła danych
-    st.header("📊 Źródło danych")
-    data_source = st.radio(
-        "Wybierz sposób wprowadzenia domen:",
-        ["Upload pliku CSV", "Wpisz domenę ręcznie"]
-    )
-    
-    websites = []
-    
-    if data_source == "Upload pliku CSV":
-        uploaded_file = st.file_uploader(
-            "Wybierz plik CSV ze stronami internetowymi firm (kolumna A)",
-            type=['csv']
-        )
-        
-        if uploaded_file is not None:
-            try:
-                df = pd.read_csv(uploaded_file)
-                websites = df.iloc[:, 0].dropna().tolist()
-                
-                st.subheader("📊 Podgląd danych")
-                st.dataframe(df.head())
-                
-            except Exception as e:
-                st.error(f"Błąd wczytywania pliku: {str(e)}")
-    
+        api_key = st.text_input("RocketReach API Key", type="password")
+        titles = st.text_area("Stanowiska", "M&A\ncorporate development\nstrategy").splitlines()
+        exclude = st.text_area("Wykluczenia", "hr\nmarketing").splitlines()
+    source = st.radio("Źródło domen", ["CSV","Manual"])
+    domains = []
+    if source=="CSV":
+        f = st.file_uploader("Wgraj CSV", type="csv")
+        if f:
+            df = pd.read_csv(f)
+            domains = df.iloc[:,0].dropna().tolist()
+            st.dataframe(df.head())
     else:
-        st.subheader("🌐 Wprowadź domenę ręcznie")
-        manual_domain = st.text_input(
-            "Wpisz domenę firmy (np. https://www.nvidia.com/)",
-            placeholder="https://www.example.com"
-        )
-        
-        if manual_domain.strip():
-            websites = [manual_domain.strip()]
-            st.success(f"Dodano domenę: {manual_domain}")
-    
-    # Przycisk wyszukiwania
-    if websites and api_key:
-        if st.button("🚀 Rozpocznij wyszukiwanie", type="primary"):
-            rr_api = RocketReachAPI(api_key, webhook_id)
-            
-            if webhook_id:
-                # Tryb webhook - zbieranie profili z wszystkich firm przed bulk lookup
-                st.info("🔔 Tryb webhook - zbieranie profili z wszystkich firm...")
-                
-                all_profiles = []
-                
-                for i, website in enumerate(websites):
-                    st.write(f"🔍 Analizowanie: {website} ({i+1}/{len(websites)})")
-                    
-                    # Znajdź profile
-                    profiles = rr_api.search_people_profiles(website, job_titles, exclude_titles)
-                    
-                    if profiles:
-                        st.write(f"📋 Znaleziono {len(profiles)} profili")
-                        
-                        # Wyświetl znalezione profile
-                        for profile in profiles:
-                            st.write(f"• {profile.get('name', 'N/A')} - {profile.get('title', 'N/A')} ({profile.get('company', 'N/A')})")
-                        
-                        all_profiles.extend(profiles)
-                    else:
-                        st.write("❌ Brak profili")
-                    
-                    time.sleep(random.uniform(1, 2))
-                
-                # Wykonaj bulk lookup jeśli mamy wystarczająco profili
-                if len(all_profiles) >= 10:
-                    st.write(f"📦 Łącznie znaleziono {len(all_profiles)} profili - wysyłam do bulk lookup")
-                    rr_api.bulk_lookup(all_profiles[:100])  # Limit 100 profili na zapytanie
-                else:
-                    st.error(f"❌ Znaleziono tylko {len(all_profiles)} profili. Bulk lookup wymaga minimum 10.")
-                
-                st.success("📬 Wszystkie zapytania wysłane. Sprawdź swój webhook endpoint!")
-                st.info("💡 Wyniki z emailami, grade i SMTP validation przyjdą na Twój serwer webhook")
-                
-            else:
-                # Tryb synchroniczny - oryginalny kod
-                results = []
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                for i, website in enumerate(websites):
-                    status_text.text(f"Analizowanie: {website} ({i+1}/{len(websites)})")
-                    
-                    # Znajdź profile
-                    profiles = rr_api.search_people_profiles(website, job_titles, exclude_titles)
-                    
-                    result_row = {"Website": website}
-                    
-                    if not profiles:
-                        result_row["Status"] = "Nie znaleziono profili"
-                        for j in range(1, 4):  # Tylko 3 kontakty
-                            result_row.update({
-                                f"Imię i nazwisko osoby {j}": "",
-                                f"Stanowisko osoby {j}": "",
-                                f"Email osoby {j}": "",
-                                f"LinkedIn URL osoby {j}": "",
-                                f"Grade emaila osoby {j}": "",
-                                f"SMTP Valid osoby {j}": ""
-                            })
-                    else:
-                        valid_contacts = []
-                        
-                        # Synchroniczne lookupy
-                        for person in profiles[:3]:  # Tylko 3 osoby
-                            details = rr_api.lookup_person_details(person['id'])
-                            time.sleep(1)  # Rate limiting
-                            
-                            if details.get('email') and details.get('smtp_valid') != 'invalid':
-                                combined_contact = {**person, **details}
-                                valid_contacts.append(combined_contact)
-                                st.success(f"✅ {details.get('name')} - {details.get('email')} (Grade: {details.get('email_grade', 'N/A')})")
-                        
-                        if not valid_contacts:
-                            result_row["Status"] = "Nie znaleziono kontaktów z prawidłowymi emailami"
-                            for j in range(1, 4):
-                                result_row.update({
-                                    f"Imię i nazwisko osoby {j}": "",
-                                    f"Stanowisko osoby {j}": "",
-                                    f"Email osoby {j}": "",
-                                    f"LinkedIn URL osoby {j}": "",
-                                    f"Grade emaila osoby {j}": "",
-                                    f"SMTP Valid osoby {j}": ""
-                                })
-                        else:
-                            result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z prawidłowymi emailami"
-                            
-                            for j, contact in enumerate(valid_contacts[:3], 1):
-                                result_row.update({
-                                    f"Imię i nazwisko osoby {j}": contact.get('name', ''),
-                                    f"Stanowisko osoby {j}": contact.get('title', ''),
-                                    f"Email osoby {j}": contact.get('email', ''),
-                                    f"LinkedIn URL osoby {j}": contact.get('linkedin', ''),
-                                    f"Grade emaila osoby {j}": contact.get('email_grade', ''),
-                                    f"SMTP Valid osoby {j}": contact.get('smtp_valid', '')
-                                })
-                            
-                            # Wypełnij pozostałe puste kolumny
-                            for j in range(len(valid_contacts) + 1, 4):
-                                result_row.update({
-                                    f"Imię i nazwisko osoby {j}": "",
-                                    f"Stanowisko osoby {j}": "",
-                                    f"Email osoby {j}": "",
-                                    f"LinkedIn URL osoby {j}": "",
-                                    f"Grade emaila osoby {j}": "",
-                                    f"SMTP Valid osoby {j}": ""
-                                })
-                    
-                    results.append(result_row)
-                    progress_bar.progress((i + 1) / len(websites))
-                    
-                    # Opóźnienie między firmami
-                    if i < len(websites) - 1:
-                        time.sleep(random.uniform(2, 4))
-                
-                status_text.text("✅ Analiza zakończona!")
-                
-                # Wyświetl wyniki
-                st.subheader("📋 Wyniki wyszukiwania")
-                results_df = pd.DataFrame(results)
-                st.dataframe(results_df, use_container_width=True)
-                
-                # Statystyki
-                st.subheader("📊 Statystyki")
-                total_contacts = sum(1 for result in results 
-                                   for j in range(1, 4) 
-                                   if result.get(f"Email osoby {j}"))
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Przeanalizowane firmy", len(websites))
-                with col2:
-                    st.metric("Znalezione kontakty", total_contacts)
-                with col3:
-                    firms_with_contacts = sum(1 for result in results 
-                                            if "kontakt" in result["Status"] and "Nie znaleziono" not in result["Status"])
-                    st.metric("Firmy z kontaktami", firms_with_contacts)
-                
-                # Download button
-                excel_data = create_excel_file(results_df)
-                st.download_button(
-                    "📥 Pobierz wyniki jako Excel",
-                    data=excel_data,
-                    file_name="kontakty_inwestorzy.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-    
+        dom = st.text_input("Domena", "https://example.com")
+        if dom: domains=[dom]
+    if domains and api_key and st.button("🚀 Wyszukaj"):
+        rr = RocketReachAPI(api_key)
+        rows = []
+        progress = st.progress(0)
+        for i, d in enumerate(domains):
+            contacts = rr.search_with_emails(d, titles, exclude)
+            row = {"Website":d, "Status":f"Znaleziono {len(contacts)} kontakt(ów)" if contacts else "Brak wyników"}
+            for j in range(1,4):
+                c = contacts[j-1] if j-1 < len(contacts) else {}
+                row.update({
+                    f"Name {j}": c.get("name",""),
+                    f"Title {j}":c.get("title",""),
+                    f"Email {j}":c.get("email",""),
+                    f"LinkedIn {j}":c.get("linkedin",""),
+                    f"Grade {j}":c.get("email_grade","")
+                })
+            rows.append(row)
+            progress.progress((i+1)/len(domains))
+            if i < len(domains)-1:
+                time.sleep(random.uniform(1,2))
+        df_res = pd.DataFrame(rows)
+        st.dataframe(df_res, use_container_width=True)
+        excel_bytes = create_excel(df_res)
+        st.download_button("📥 Pobierz Excel", data=excel_bytes,
+                            file_name="kontakty.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     elif not api_key:
-        st.warning("⚠️ Wprowadź klucz API RocketReach w panelu bocznym")
-    elif not websites:
-        st.info("📝 Wprowadź dane firm do analizy")
+        st.warning("Wprowadź klucz API")
+    elif not domains:
+        st.info("Podaj domeny")
 
 if __name__ == "__main__":
     main()
