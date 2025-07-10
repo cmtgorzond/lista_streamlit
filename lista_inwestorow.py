@@ -91,7 +91,7 @@ class RocketReachAPI:
                             break
             
             st.info(f"📊 Znaleziono {len(all_results)} profili do sprawdzenia")
-            return all_results[:10]  # Zwróć maksymalnie 10 profili
+            return all_results  # Zwróć wszystkie znalezione profile
             
         except Exception as e:
             st.error(f"Błąd wyszukiwania: {str(e)}")
@@ -180,34 +180,56 @@ class RocketReachAPI:
             st.error(f"Błąd wyszukiwania po {field}: {str(e)}")
             return []
 
-    class RocketReachAPI:
-    # …
-
-    def bulk_lookup(self, queries: list[dict]):
-        """Bulk lookup – wersja z queries; wymaga ≥ 10 pozycji."""
-        if len(queries) < 10:
-            st.error(f"Bulk Lookup wymaga min. 10 rekordów – masz {len(queries)}.")
-            return
-
-        payload = {
-            "queries": queries,
-            "lookup_type": "standard"
-        }
-        if self.webhook_id:
-            payload["webhook_id"] = self.webhook_id
-
-        # poprawny endpoint
-        resp = requests.post(
-            f"{self.base_url}/api/v2/person/bulkLookup",
-            headers=self.headers,
-            json=payload,
-            timeout=30
-        )
-        if resp.status_code in (200, 201, 202):
-            msg = "wyniki przyjdą na webhook" if self.webhook_id else "zapytanie przyjęte"
-            st.success(f"🔔 Bulk lookup wysłany – {msg}")
-        else:
-            st.error(f"Bulk lookup error {resp.status_code}: {resp.text}")
+    def bulk_lookup(self, profiles: List[Dict]):
+        """Wywołaj bulk lookup z webhookiem - POPRAWIONY ENDPOINT I FORMAT"""
+        try:
+            if len(profiles) < 10:
+                st.error(f"❌ Bulk Lookup wymaga minimum 10 profili. Znaleziono tylko {len(profiles)} profili.")
+                return
+                
+            self._rate_limit_check()
+            
+            # Buduj queries zgodnie z dokumentacją API
+            queries = []
+            for profile in profiles:
+                if profile.get("linkedin"):  # Preferowane - najwyższa trafność
+                    queries.append({"linkedin_url": profile["linkedin"]})
+                elif profile.get("id"):  # Drugi wybór
+                    queries.append({"profile_id": profile["id"]})
+                elif profile.get("name") and profile.get("company"):  # Fallback
+                    queries.append({
+                        "name": profile["name"],
+                        "current_employer": profile["company"]
+                    })
+            
+            if not queries:
+                st.error("❌ Nie można utworzyć queries - brak wymaganych danych w profilach")
+                return
+            
+            payload = {
+                "queries": queries,  # POPRAWIONY FORMAT
+                "lookup_type": "standard"
+            }
+            
+            if self.webhook_id:
+                payload["webhook_id"] = self.webhook_id
+            
+            response = requests.post(
+                f"{self.base_url}/api/v2/person/bulkLookup",  # POPRAWIONY ENDPOINT
+                headers=self.headers,
+                json=payload,
+                timeout=30
+            )
+            
+            if response.status_code in (200, 201, 202):  # Akceptuj wszystkie kody sukcesu
+                if self.webhook_id:
+                    st.success("🔔 Bulk lookup wysłany, wyniki przyjdą na webhook")
+                else:
+                    st.info("📋 Bulk lookup wykonany synchronicznie")
+                    return response.json()
+            else:
+                st.error(f"Bulk lookup error {response.status_code}: {response.text}")
+                return {}
                 
         except Exception as e:
             st.error(f"Błąd bulk lookup: {str(e)}")
@@ -393,8 +415,10 @@ def main():
             rr_api = RocketReachAPI(api_key, webhook_id)
             
             if webhook_id:
-                # Tryb webhook - tylko wyszukiwanie i bulk lookup
-                st.info("🔔 Tryb webhook - wyniki będą wysyłane na Twój endpoint")
+                # Tryb webhook - zbieranie profili z wszystkich firm przed bulk lookup
+                st.info("🔔 Tryb webhook - zbieranie profili z wszystkich firm...")
+                
+                all_profiles = []
                 
                 for i, website in enumerate(websites):
                     st.write(f"🔍 Analizowanie: {website} ({i+1}/{len(websites)})")
@@ -403,18 +427,24 @@ def main():
                     profiles = rr_api.search_people_profiles(website, job_titles, exclude_titles)
                     
                     if profiles:
-                        ids = [p["id"] for p in profiles]
-                        st.write(f"📋 Znaleziono {len(profiles)} profili, wysyłam {len(ids)} do bulk lookup")
+                        st.write(f"📋 Znaleziono {len(profiles)} profili")
                         
                         # Wyświetl znalezione profile
                         for profile in profiles:
                             st.write(f"• {profile.get('name', 'N/A')} - {profile.get('title', 'N/A')} ({profile.get('company', 'N/A')})")
                         
-                        rr_api.bulk_lookup(ids)
+                        all_profiles.extend(profiles)
                     else:
-                        st.write("❌ Brak profili do sprawdzenia")
+                        st.write("❌ Brak profili")
                     
                     time.sleep(random.uniform(1, 2))
+                
+                # Wykonaj bulk lookup jeśli mamy wystarczająco profili
+                if len(all_profiles) >= 10:
+                    st.write(f"📦 Łącznie znaleziono {len(all_profiles)} profili - wysyłam do bulk lookup")
+                    rr_api.bulk_lookup(all_profiles[:100])  # Limit 100 profili na zapytanie
+                else:
+                    st.error(f"❌ Znaleziono tylko {len(all_profiles)} profili. Bulk lookup wymaga minimum 10.")
                 
                 st.success("📬 Wszystkie zapytania wysłane. Sprawdź swój webhook endpoint!")
                 st.info("💡 Wyniki z emailami, grade i SMTP validation przyjdą na Twój serwer webhook")
@@ -435,7 +465,7 @@ def main():
                     
                     if not profiles:
                         result_row["Status"] = "Nie znaleziono profili"
-                        for j in range(1, 4):  # Zmiana: tylko 3 kontakty
+                        for j in range(1, 4):  # Tylko 3 kontakty
                             result_row.update({
                                 f"Imię i nazwisko osoby {j}": "",
                                 f"Stanowisko osoby {j}": "",
@@ -459,7 +489,7 @@ def main():
                         
                         if not valid_contacts:
                             result_row["Status"] = "Nie znaleziono kontaktów z prawidłowymi emailami"
-                            for j in range(1, 4):  # Zmiana: tylko 3 kontakty
+                            for j in range(1, 4):
                                 result_row.update({
                                     f"Imię i nazwisko osoby {j}": "",
                                     f"Stanowisko osoby {j}": "",
@@ -471,7 +501,7 @@ def main():
                         else:
                             result_row["Status"] = f"Znaleziono {len(valid_contacts)} kontakt(ów) z prawidłowymi emailami"
                             
-                            for j, contact in enumerate(valid_contacts[:3], 1):  # Zmiana: tylko 3 kontakty
+                            for j, contact in enumerate(valid_contacts[:3], 1):
                                 result_row.update({
                                     f"Imię i nazwisko osoby {j}": contact.get('name', ''),
                                     f"Stanowisko osoby {j}": contact.get('title', ''),
@@ -482,7 +512,7 @@ def main():
                                 })
                             
                             # Wypełnij pozostałe puste kolumny
-                            for j in range(len(valid_contacts) + 1, 4):  # Zmiana: tylko 3 kontakty
+                            for j in range(len(valid_contacts) + 1, 4):
                                 result_row.update({
                                     f"Imię i nazwisko osoby {j}": "",
                                     f"Stanowisko osoby {j}": "",
@@ -509,7 +539,7 @@ def main():
                 # Statystyki
                 st.subheader("📊 Statystyki")
                 total_contacts = sum(1 for result in results 
-                                   for j in range(1, 4)  # Zmiana: tylko 3 kontakty
+                                   for j in range(1, 4) 
                                    if result.get(f"Email osoby {j}"))
                 
                 col1, col2, col3 = st.columns(3)
