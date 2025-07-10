@@ -28,7 +28,7 @@ class RocketReachAPI:
 
     def _rate_limit_check(self):
         now = time.time()
-        # Zachowaj timestampy tylko z ostatniej sekundy
+        # Zachowaj tylko timestampy z ostatniej sekundy
         self.request_timestamps = [t for t in self.request_timestamps if t > now - 1]
         if len(self.request_timestamps) >= 5:
             sleep_time = 1.0 - (now - self.request_timestamps[0])
@@ -146,11 +146,14 @@ class RocketReachAPI:
             processed = self._process(detail)
             if processed:
                 valid_contacts.append(processed)
-                st.success(f"✅ Znaleziono kontakt: {processed['name']} ({processed['title']}) | {processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})")
+                st.success(
+                    f"✅ Znaleziono kontakt: {processed['name']} ({processed['title']}) | "
+                    f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
+                )
 
         # ETAP 2: wyszukiwanie po skills, jeśli mniej niż 3
         if len(valid_contacts) < 3:
-            st.info(f"🎯 Etap 2: rozszerzone wyszukiwanie (skills)...")
+            st.info("🎯 Etap 2: rozszerzone wyszukiwanie (skills)...")
             candidates2 = self._search(domain, "skills", titles, exclude)
             seen_emails = {c["email"] for c in valid_contacts}
             for c in candidates2:
@@ -160,7 +163,10 @@ class RocketReachAPI:
                 processed = self._process(detail)
                 if processed and processed["email"] not in seen_emails:
                     valid_contacts.append(processed)
-                    st.success(f"✅ Znaleziono kontakt: {processed['name']} ({processed['title']}) | {processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})")
+                    st.success(
+                        f"✅ Znaleziono kontakt: {processed['name']} ({processed['title']}) | "
+                        f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
+                    )
 
         st.info(f"📊 Łącznie: {len(valid_contacts)} kontaktów")
         return valid_contacts[:3]
