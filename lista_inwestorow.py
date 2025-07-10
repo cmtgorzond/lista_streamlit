@@ -180,39 +180,34 @@ class RocketReachAPI:
             st.error(f"Błąd wyszukiwania po {field}: {str(e)}")
             return []
 
-    def bulk_lookup(self, ids: List[int]):
-        """Wywołaj bulk lookup z webhookiem - POPRAWIONY ENDPOINT"""
-        try:
-            if len(ids) < 10:
-                st.error("❌ Bulk Lookup wymaga minimum 10 profili. Znaleziono tylko " + str(len(ids)) + " profili.")
-                return
-                
-            self._rate_limit_check()
-            
-            payload = {
-                "profiles": [{"id": pid} for pid in ids],
-                "lookup_type": "standard"
-            }
-            
-            if self.webhook_id:
-                payload["webhook_id"] = self.webhook_id
-            
-            response = requests.post(
-                f"{self.base_url}/api/v2/bulkLookup",  # POPRAWIONY ENDPOINT
-                headers=self.headers,
-                json=payload,
-                timeout=30
-            )
-            
-            if response.status_code in (200, 201, 202):  # Akceptuj wszystkie kody sukcesu
-                if self.webhook_id:
-                    st.success("🔔 Bulk lookup wysłany, wyniki przyjdą na webhook")
-                else:
-                    st.info("📋 Bulk lookup wykonany synchronicznie")
-                    return response.json()
-            else:
-                st.error(f"Bulk lookup error {response.status_code}: {response.text}")
-                return {}
+    class RocketReachAPI:
+    # …
+
+    def bulk_lookup(self, queries: list[dict]):
+        """Bulk lookup – wersja z queries; wymaga ≥ 10 pozycji."""
+        if len(queries) < 10:
+            st.error(f"Bulk Lookup wymaga min. 10 rekordów – masz {len(queries)}.")
+            return
+
+        payload = {
+            "queries": queries,
+            "lookup_type": "standard"
+        }
+        if self.webhook_id:
+            payload["webhook_id"] = self.webhook_id
+
+        # poprawny endpoint
+        resp = requests.post(
+            f"{self.base_url}/api/v2/person/bulkLookup",
+            headers=self.headers,
+            json=payload,
+            timeout=30
+        )
+        if resp.status_code in (200, 201, 202):
+            msg = "wyniki przyjdą na webhook" if self.webhook_id else "zapytanie przyjęte"
+            st.success(f"🔔 Bulk lookup wysłany – {msg}")
+        else:
+            st.error(f"Bulk lookup error {resp.status_code}: {resp.text}")
                 
         except Exception as e:
             st.error(f"Błąd bulk lookup: {str(e)}")
