@@ -181,7 +181,7 @@ class RocketReachAPI:
             return []
 
     def bulk_lookup(self, profiles: List[Dict]):
-        """Wywołaj bulk lookup z webhookiem - POPRAWIONY ENDPOINT (małe litery)"""
+        """Wywołaj bulk lookup z webhookiem - POPRAWIONY ENDPOINT (CamelCase)"""
         try:
             if len(profiles) < 10:
                 st.error(f"❌ Bulk Lookup wymaga minimum 10 profili. Znaleziono tylko {len(profiles)} profili.")
@@ -215,7 +215,7 @@ class RocketReachAPI:
                 payload["webhook_id"] = self.webhook_id
             
             response = requests.post(
-                f"{self.base_url}/api/v2/person/bulklookup",  # POPRAWIONY ENDPOINT - małe litery
+                f"{self.base_url}/api/v2/person/bulkLookup",  # POPRAWIONY ENDPOINT - CamelCase
                 headers=self.headers,
                 json=payload,
                 timeout=30
