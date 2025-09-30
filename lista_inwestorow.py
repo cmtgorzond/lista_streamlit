@@ -186,11 +186,11 @@ def main():
         api_key = st.text_input("RocketReach API Key", type="password")
         titles = st.text_area(
             "Nazwy stanowisk (jedna linia = jeden tytuł)",
-            "M&A\ncorporate development\nstrategy"
+            "M&A\ncorporate development\nstrategy\ngrowth\nMerger\nM and A\nstrategic\ninvestment\nfinancial\nfinance\nCFO\nCEO\nAcquisitions\nOrigination\nChief Financial Officer\nChief Executive Officer\nChief Strategy Officer\nCSO"
         ).splitlines()
         exclude = st.text_area(
             "Nazwy stanowisk do wykluczenia (jedna linia = jeden tytuł)",
-            "hr\nmarketing\nsales"
+            "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nintern\nanalyst\nAccount\nEngineer\nReporting\nSourcing\nController\nService\nPurchaser\ncustomer\nemployee"
         ).splitlines()
 
     source = st.radio("Źródło domen", ["CSV", "Manual"])
@@ -245,3 +245,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
