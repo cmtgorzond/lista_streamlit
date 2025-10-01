@@ -190,7 +190,7 @@ def main():
         ).splitlines()
         exclude = st.text_area(
             "Nazwy stanowisk do wykluczenia (jedna linia = jeden tytuł)",
-            "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nintern\nanalyst\nAccount\nEngineer\nReporting\nSourcing\nController\nService\nPurchaser\ncustomer\nemployee"
+            "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nintern\nanalyst\nAccount\nDeveloper\nCommercial\nStudent\nEngineer\nReporting\nSourcing\nController\nService\nPurchaser\ncustomer\nemployee"
         ).splitlines()
 
     source = st.radio("Źródło domen", ["CSV", "Manual"])
@@ -245,4 +245,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
