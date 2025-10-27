@@ -42,14 +42,14 @@ DEPARTMENTS_LIST = [
 ]
 
 MANAGEMENT_LEVELS_MAP = {
-    "Founder/Owner": "owner",
+    "Founder/Owner": "Founder/Owner",
     "C-Level": "c-level",
-    "Vice President": "vp-level",
+    "Vice President": "Vice President",
     "Head": "head",
     "Director": "director",
     "Manager": "manager",
     "Senior": "senior",
-    "Individual Contributor": "individual_contributor",
+    "Individual Contributor": "Individual Contributor",
     "Entry": "entry",
     "Intern": "intern",
     "Volunteer": "volunteer"
@@ -417,3 +417,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
