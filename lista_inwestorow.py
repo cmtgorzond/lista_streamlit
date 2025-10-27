@@ -14,6 +14,56 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
     import openpyxl
 
+# --- Stałe listy dla filtrów ---
+
+# ZMIANA: Zaktualizowana lista działów na podstawie Twojego obrazu
+DEPARTMENTS_LIST = [
+    "Executive",
+    "Finance",
+    "IT",
+    "Operations",
+    "Engineering",
+    "Human Resources",
+    "Legal",
+    "Sales",
+    "Marketing",
+    "Support",
+    "Business Development",
+    "Product",
+    "Medical",
+    "Purchasing",
+    "Research",
+    "Supply Chain",
+    "Accounting",
+    "Media & Communication",
+    "Arts & Design",
+    "Education",
+    "Administrative",
+    "Consulting",
+    "Entrepreneurship",
+    "Facilities",
+    "Military & Protective Services",
+    "Quality Assurance",
+    "Real Estate",
+    "Community & Social Services"
+]
+
+# ZMIANA: Zaktualizowana mapa Poziomów Zarządzania na podstawie Twojego obrazu
+# (Przyjazna nazwa z obrazu -> Wartość API)
+MANAGEMENT_LEVELS_MAP = {
+    "C-Suite": "c-level",
+    "VP-Level": "vp-level",
+    "Director": "director",
+    "Manager": "manager",
+    "Senior": "senior",
+    "Entry": "entry",
+    "Owner": "owner",
+    "Partner": "partner",
+    "Unpaid": "unpaid"
+}
+# ---------------------------------
+
+
 class RocketReachAPI:
     def __init__(self, api_key: str, strict_backoff: bool = True):
         self.api_key = api_key
@@ -28,7 +78,6 @@ class RocketReachAPI:
 
     def _rate_limit_check(self):
         now = time.time()
-        # Zachowaj tylko timestampy z ostatniej sekundy
         self.request_timestamps = [t for t in self.request_timestamps if t > now - 1]
         if len(self.request_timestamps) >= 5:
             sleep_time = 1.0 - (now - self.request_timestamps[0])
@@ -38,7 +87,6 @@ class RocketReachAPI:
 
     def _handle_rate_limit(self, resp: requests.Response) -> bool:
         if resp.status_code == 429:
-            # Odczytaj dokładny czas oczekiwania z JSON.wait lub nagłówka Retry-After
             retry_after = None
             try:
                 retry_after = float(resp.json().get("wait"))
@@ -52,13 +100,15 @@ class RocketReachAPI:
             return True
         return False
 
-    def _search(self, domain: str, field: str, values: List[str], exclude: List[str]) -> List[Dict]:
+    def _search(self, domain: str, field: str, values: List[str], exclude: List[str], management_levels: List[str], country: str) -> List[Dict]:
         self._rate_limit_check()
         if not domain.startswith(("http://", "https://")):
             domain = "https://" + domain
         clean_values = [v.strip() for v in values if v.strip()]
         if not clean_values:
+            st.warning(f"⚠️ Pusta lista wartości dla pola '{field}', pomijam wyszukiwanie.")
             return []
+            
         payload = {
             "query": {
                 "company_domain": [domain],
@@ -67,9 +117,26 @@ class RocketReachAPI:
             "start": 1,
             "page_size": 50
         }
+        
+        # --- Dodawanie filtrów i wykluczeń do zapytania ---
         if exclude:
-            exclude_field = f"exclude_{field}" if field != "skills" else "exclude_current_title"
+            if field == "current_title":
+                exclude_field = "exclude_current_title"
+            elif field == "skills":
+                exclude_field = "exclude_skills"
+            elif field == "department":
+                exclude_field = "exclude_department"
+            else:
+                exclude_field = f"exclude_{field}"
+                
             payload["query"][exclude_field] = [e.strip() for e in exclude if e.strip()]
+        
+        if management_levels:
+            payload["query"]["management_level"] = management_levels
+            
+        if country and country.strip():
+            payload["query"]["location"] = [country.strip()] 
+        # ----------------------------------------------------
 
         for _ in range(3):
             resp = requests.post(f"{self.base_url}/person/search", headers=self.headers, json=payload)
@@ -77,6 +144,7 @@ class RocketReachAPI:
                 continue
             if resp.status_code == 201:
                 profiles = resp.json().get("profiles", [])
+                st.info(f"🔎 Wyszukiwanie (pole: '{field}') znalazło {len(profiles)} profili. Sprawdzam emaile dla max 15...")
                 return [
                     {
                         "id": p["id"],
@@ -86,7 +154,7 @@ class RocketReachAPI:
                     }
                     for p in profiles[:15]
                 ]
-            st.error(f"Search API error {resp.status_code}")
+            st.error(f"Search API error {resp.status_code} dla pola '{field}'. Treść: {resp.text}")
             break
         return []
 
@@ -102,12 +170,18 @@ class RocketReachAPI:
                 continue
             if resp.status_code == 200:
                 return resp.json()
+            if resp.status_code == 404:
+                st.warning(f"Profil o ID {person_id} nie został znaleziony (404).")
+                break
+            st.error(f"Lookup API error {resp.status_code} dla ID {person_id}. Treść: {resp.text}")
             break
         return {}
 
     def _process(self, data: Dict) -> Dict:
+        if not data or 'id' not in data:
+            return {}
+            
         grade_order = {"A": 1, "A-": 2, "B": 3, "B-": 4, "C": 5, "D": 6, "F": 7}
-        # Wybór emaila
         email = data.get("recommended_professional_email") or data.get("current_work_email")
         if not email:
             professional_emails = [
@@ -121,7 +195,7 @@ class RocketReachAPI:
         else:
             email_obj = next((e for e in data.get("emails", []) if e.get("email") == email), {})
 
-        if email_obj.get("smtp_valid") == "invalid":
+        if not email_obj or email_obj.get("smtp_valid") == "invalid":
             return {}
 
         return {
@@ -133,42 +207,53 @@ class RocketReachAPI:
             "linkedin": data.get("linkedin_url", "")
         }
 
-    def search_with_emails(self, domain: str, titles: List[str], exclude: List[str]) -> List[Dict]:
+    def search_with_emails(self, domain: str, search_terms: List[str], departments: List[str], exclude: List[str], management_levels: List[str], country: str) -> List[Dict]:
         valid_contacts = []
+        seen_profile_ids = set() 
 
-        # ETAP 1: wyszukiwanie po stanowiskach
-        st.info("🔍 Etap 1: wyszukiwanie po stanowiskach...")
-        candidates = self._search(domain, "current_title", titles, exclude)
-        for c in candidates:
-            if len(valid_contacts) >= 3:
-                break
-            detail = self._lookup(c["id"])
-            processed = self._process(detail)
-            if processed:
-                valid_contacts.append(processed)
-                st.success(
-                    f"✅ Znaleziono kontakt: {processed['name']} ({processed['title']}) | "
-                    f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
-                )
-
-        # ETAP 2: wyszukiwanie po skills, jeśli mniej niż 3
-        if len(valid_contacts) < 3:
-            st.info("🎯 Etap 2: rozszerzone wyszukiwanie (skills)...")
-            candidates2 = self._search(domain, "skills", titles, exclude)
-            seen_emails = {c["email"] for c in valid_contacts}
-            for c in candidates2:
+        def process_candidates(candidates: List[Dict], stage_name: str):
+            for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
+                if c["id"] in seen_profile_ids:
+                    continue
+                    
                 detail = self._lookup(c["id"])
                 processed = self._process(detail)
-                if processed and processed["email"] not in seen_emails:
+                if processed:
                     valid_contacts.append(processed)
+                    seen_profile_ids.add(c["id"])
                     st.success(
-                        f"✅ Znaleziono kontakt: {processed['name']} ({processed['title']}) | "
+                        f"✅ ({stage_name}) Znaleziono kontakt: {processed['name']} ({processed['title']}) | "
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
                     )
 
-        st.info(f"📊 Łącznie: {len(valid_contacts)} kontaktów")
+        # ETAP 1: Wyszukiwanie po STANOWISKACH (current_title)
+        st.info(f"🔍 Etap 1: Wyszukiwanie po STANOWISKACH dla domeny: {domain}...")
+        if search_terms:
+            candidates_title = self._search(domain, "current_title", search_terms, exclude, management_levels, country)
+            process_candidates(candidates_title, "Etap 1: Stanowisko")
+        else:
+            st.info("Pominięto Etap 1 (brak słów kluczowych dla stanowisk).")
+
+        # ETAP 2: Wyszukiwanie po DZIAŁACH (department)
+        if len(valid_contacts) < 3 and departments:
+            st.info(f"🎯 Etap 2: Wyszukiwanie po DZIAŁACH dla domeny: {domain}...")
+            candidates_dept = self._search(domain, "department", departments, exclude, management_levels, country)
+            process_candidates(candidates_dept, "Etap 2: Dział")
+        elif not departments:
+            st.info("Pominięto Etap 2 (nie wybrano działów).")
+
+        # ETAP 3: Wyszukiwanie po UMIEJĘTNOŚCIACH (skills)
+        if len(valid_contacts) < 3 and search_terms:
+            st.info(f"✨ Etap 3: Wyszukiwanie po UMIEJĘTNOŚCIACH dla domeny: {domain}...")
+            candidates_skills = self._search(domain, "skills", search_terms, exclude, management_levels, country)
+            process_candidates(candidates_skills, "Etap 3: Umiejętności")
+        elif not search_terms:
+            st.info("Pominięto Etap 3 (brak słów kluczowych dla umiejętności).")
+
+
+        st.info(f"📊 Zakończono dla {domain}. Łącznie: {len(valid_contacts)} kontaktów")
         return valid_contacts[:3]
 
 
@@ -182,40 +267,86 @@ def create_excel(results_df: pd.DataFrame) -> bytes:
 def main():
     st.set_page_config(page_title="🎯 Wyszukiwanie kontaktów", layout="wide")
     st.title("🎯 Wyszukiwanie kontaktów do inwestorów")
+    
     with st.sidebar:
         api_key = st.text_input("RocketReach API Key", type="password")
-        titles = st.text_area(
-            "Nazwy stanowisk (jedna linia = jeden tytuł)",
+        
+        st.subheader("Kryteria wyszukiwania")
+        # Pole dla Etapu 1 i 3
+        search_terms = st.text_area(
+            "1. Słowa kluczowe (dla Stanowisk i Umiejętności)",
             "M&A\ncorporate development\nstrategy\ngrowth\nMerger\nM and A\nstrategic\ninvestment\nfinancial\nfinance\nCFO\nCEO\nAcquisitions\nOrigination\nChief Financial Officer\nChief Executive Officer\nChief Strategy Officer\nCSO"
         ).splitlines()
+
+        # Pole dla Etapu 2
+        departments = st.multiselect(
+            "2. Działy (Departments)",
+            options=DEPARTMENTS_LIST # Użycie nowej listy
+        )
+
+        st.subheader("Filtry (Opcjonalne)")
+        
+        # Filtr Poziomu Zarządzania
+        selected_levels_display = st.multiselect(
+            "Poziom zarządzania (Management Level)",
+            options=list(MANAGEMENT_LEVELS_MAP.keys()) # Użycie nowej mapy
+        )
+        management_levels = [MANAGEMENT_LEVELS_MAP[level] for level in selected_levels_display]
+
+        # Filtr Kraju
+        country = st.text_input("Kraj (np. France, Germany, Poland)")
+
+        st.subheader("Wykluczenia")
         exclude = st.text_area(
-            "Nazwy stanowisk do wykluczenia (jedna linia = jeden tytuł)",
+            "Słowa kluczowe do wykluczenia ze stanowisk",
             "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nintern\nanalyst\nAccount\nDeveloper\nCommercial\nStudent\nEngineer\nReporting\nSourcing\nController\nService\nPurchaser\ncustomer\nemployee"
         ).splitlines()
 
+    # --- Główny interfejs ---
     source = st.radio("Źródło domen", ["CSV", "Manual"])
     domains: List[str] = []
     if source == "CSV":
         uploaded = st.file_uploader("Wgraj plik CSV z domenami", type="csv")
         if uploaded:
-            df_in = pd.read_csv(uploaded)
-            domains = df_in.iloc[:, 0].dropna().tolist()
-            st.dataframe(df_in.head())
+            try:
+                df_in = pd.read_csv(uploaded)
+                domains = df_in.iloc[:, 0].dropna().str.strip().tolist()
+                st.dataframe(df_in.head())
+                st.info(f"Załadowano {len(domains)} domen.")
+            except Exception as e:
+                st.error(f"Błąd podczas wczytywania pliku CSV: {e}")
     else:
-        manual = st.text_input("Wpisz domenę (np. https://example.com)")
+        manual = st.text_input("Wpisz domenę (np. example.com lub https://example.com)")
         if manual:
             domains = [manual.strip()]
 
     if not api_key:
         st.warning("⚠️ Wprowadź klucz API RocketReach")
     elif not domains:
-        st.info("📝 Podaj przynajmniej jedną domenę")
+        st.info("📝 Podaj przynajmniej jedną domenę (przez CSV lub manualnie)")
+    elif not search_terms and not departments:
+        st.warning("⚠️ Wprowadź przynajmniej jedno słowo kluczowe lub wybierz dział")
     elif st.button("🚀 Rozpocznij wyszukiwanie"):
         rr = RocketReachAPI(api_key)
         results = []
-        progress = st.progress(0)
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
+
         for idx, domain in enumerate(domains):
-            contacts = rr.search_with_emails(domain, titles, exclude)
+            if not domain: 
+                continue
+            
+            status_text.info(f"Przetwarzam domenę {idx+1}/{len(domains)}: {domain}")
+            
+            contacts = rr.search_with_emails(
+                domain, 
+                search_terms, 
+                departments, 
+                exclude, 
+                management_levels, 
+                country
+            )
+            
             row = {"Website": domain, "Status": f"Znaleziono {len(contacts)} kontakt(ów)"}
             for i in range(1, 4):
                 c = contacts[i - 1] if i - 1 < len(contacts) else {}
@@ -227,13 +358,13 @@ def main():
                     f"Grade {i}": c.get("email_grade", "")
                 })
             results.append(row)
-            progress.progress((idx + 1) / len(domains))
-            if idx < len(domains) - 1:
-                time.sleep(random.uniform(1, 2))
+            progress_bar.progress((idx + 1) / len(domains))
 
+        status_text.success("🎉 Wyszukiwanie zakończone!")
         df_out = pd.DataFrame(results)
         st.subheader("📋 Wyniki wyszukiwania")
         st.dataframe(df_out, use_container_width=True)
+        
         excel_data = create_excel(df_out)
         st.download_button(
             "📥 Pobierz wyniki jako Excel",
@@ -242,8 +373,5 @@ def main():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-
 if __name__ == "__main__":
     main()
-
-
