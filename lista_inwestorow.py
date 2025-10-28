@@ -113,8 +113,8 @@ class RocketReachAPI:
             payload["query"]["skills"] = clean_values
         elif field == "department":
             payload["query"]["department"] = clean_values
-        elif field == "management_level":
-            payload["query"]["management_level"] = clean_values
+        elif field == "management_levels":
+            payload["query"]["management_levels"] = clean_values
         else:
             payload["query"][field] = clean_values
         
@@ -126,8 +126,8 @@ class RocketReachAPI:
                 payload["query"]["exclude_skills"] = [e.strip() for e in exclude if e.strip()]
         
         # Dodaj management levels jeśli wybrane (jako dodatkowy filtr)
-        if management_levels and field != "management_level":
-            payload["query"]["management_level"] = management_levels
+        if management_levels and field != "management_levels":
+            payload["query"]["management_levels"] = _levels
         
         # Dodaj filtr kraju jeśli podany
         if country:
@@ -209,14 +209,14 @@ class RocketReachAPI:
         }
 
     def search_with_emails(self, domain: str, titles: List[str], departments: List[str], 
-                          exclude: List[str], management_levels: List[str], country: str) -> List[Dict]:
+                          exclude: List[str], _levels: List[str], country: str) -> List[Dict]:
         valid_contacts = []
         seen_emails = set()
 
         # ETAP 1: Keywords stanowisk
         if titles and len(valid_contacts) < 3:
             st.info("🔍 Etap 1: wyszukiwanie po keywords stanowisk...")
-            candidates = self._search(domain, "current_title", titles, exclude, management_levels, country)
+            candidates = self._search(domain, "current_title", titles, exclude, _levels, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -269,7 +269,7 @@ class RocketReachAPI:
             st.info("👔 Etap 4: wyszukiwanie po management levels...")
             # Użyj Founder/Owner i C-Level jako domyślne jeśli nic nie wybrano
             default_levels = ["Founder/Owner", "C-Level"] if not management_levels else management_levels
-            candidates = self._search(domain, "management_level", default_levels, exclude, None, country)
+            candidates = self._search(domain, "management_levels", default_levels, exclude, None, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -411,3 +411,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
