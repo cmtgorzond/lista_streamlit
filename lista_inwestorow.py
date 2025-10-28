@@ -4,7 +4,7 @@ import requests
 import time
 import random
 import io
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 # Sprawdź czy openpyxl jest zainstalowane
 try:
@@ -89,7 +89,7 @@ class RocketReachAPI:
         return False
 
     def _search(self, domain: str, field: str, values: List[str], exclude: List[str], 
-                management_levels: List[str] = None, country: str = None) -> List[Dict]:
+                management_levels: Optional[List[str]] = None, country: Optional[str] = None) -> List[Dict]:
         self._rate_limit_check()
         if not domain.startswith(("http://", "https://")):
             domain = "https://" + domain
@@ -107,31 +107,20 @@ class RocketReachAPI:
         }
         
         # Dodaj główne pole wyszukiwania
-        if field == "current_title":
-            payload["query"]["current_title"] = clean_values
-        elif field == "skills":
-            payload["query"]["skills"] = clean_values
-        elif field == "department":
-            payload["query"]["department"] = clean_values
-        elif field == "management_level":
-            payload["query"]["management_level"] = clean_values
-        else:
-            payload["query"][field] = clean_values
+        payload["query"][field] = clean_values
         
         # Dodaj wykluczenia
-        if exclude:
-            if field == "current_title":
-                payload["query"]["exclude_current_title"] = [e.strip() for e in exclude if e.strip()]
-            elif field == "skills":
-                payload["query"]["exclude_skills"] = [e.strip() for e in exclude if e.strip()]
+        if exclude and field in ["current_title", "skills"]:
+            exclude_field = f"exclude_{field}"
+            payload["query"][exclude_field] = [e.strip() for e in exclude if e.strip()]
         
         # Dodaj management levels jeśli wybrane (jako dodatkowy filtr)
-        if management_levels and field != "management_level":
-            payload["query"]["management_level"] = management_levels
+        if management_levels and field != "management_levels":
+            payload["query"]["management_levels"] = management_levels
         
         # Dodaj filtr kraju jeśli podany
         if country:
-            payload["query"]["country"] = country.strip()
+            payload["query"]["company_country_code"] = [country.strip()]
 
         for attempt in range(3):
             resp = requests.post(f"{self.base_url}/person/search", headers=self.headers, json=payload)
@@ -151,7 +140,7 @@ class RocketReachAPI:
             elif resp.status_code == 400:
                 try:
                     error_msg = resp.json()
-                    st.error(f"Search API error 400: {error_msg}")
+                    st.error(f"❌ Search API error 400: {error_msg}")
                 except:
                     st.error(f"Search API error 400: Bad request")
                 return []
@@ -209,7 +198,8 @@ class RocketReachAPI:
         }
 
     def search_with_emails(self, domain: str, titles: List[str], departments: List[str], 
-                          exclude: List[str], management_levels: List[str], country: str) -> List[Dict]:
+                          exclude: List[str], management_levels: Optional[List[str]], 
+                          country: Optional[str]) -> List[Dict]:
         valid_contacts = []
         seen_emails = set()
 
@@ -247,7 +237,7 @@ class RocketReachAPI:
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
                     )
 
-        # ETAP 3: Skills (te same keywords co stanowiska)
+        # ETAP 3: Skills
         if len(valid_contacts) < 3 and titles:
             st.info("🎯 Etap 3: wyszukiwanie po skills...")
             candidates = self._search(domain, "skills", titles, exclude, management_levels, country)
@@ -269,7 +259,7 @@ class RocketReachAPI:
             st.info("👔 Etap 4: wyszukiwanie po management levels...")
             # Użyj Founder/Owner i C-Level jako domyślne jeśli nic nie wybrano
             default_levels = ["Founder/Owner", "C-Level"] if not management_levels else management_levels
-            candidates = self._search(domain, "management_level", default_levels, exclude, None, country)
+            candidates = self._search(domain, "management_levels", default_levels, exclude, None, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -327,14 +317,14 @@ def main():
         st.subheader("🎯 Dodatkowe filtry")
         
         selected_management_levels = st.multiselect(
-            "Management Levels (puste = bez ograniczeń)",
+            "Management Levels (puste = domyślnie Founder/Owner + C-Level)",
             options=MANAGEMENT_LEVELS,
             default=[]
         )
         
         country = st.text_input(
-            "Kraj (puste = bez ograniczeń)",
-            placeholder="np. Poland, United States"
+            "Kod kraju (puste = bez ograniczeń)",
+            placeholder="np. US, PL, GB"
         )
 
     source = st.radio("Źródło domen", ["CSV", "Manual"])
