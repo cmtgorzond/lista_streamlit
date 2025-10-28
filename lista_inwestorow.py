@@ -54,7 +54,7 @@ MANAGEMENT_LEVELS = [
 
 # Domyślnie zaznaczone departments
 DEFAULT_DEPARTMENTS = [
-    "Founder", "Finance Executive", "Executive", "Finance",
+    "Founder", "Finance Executive", "Operations Executive", "Executive", "Finance",
     "Investment Management", "Financial Planning & Analysis",
     "Financial Reporting", "Financial Strategy"
 ]
@@ -408,3 +408,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
