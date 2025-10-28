@@ -14,6 +14,44 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
     import openpyxl
 
+# Definicje list wyboru
+DEPARTMENTS = [
+    "C-Suite", "Executive", "Founder", "Product & Engineering Executive",
+    "Finance Executive", "HR Executive", "Legal Executive", "Marketing Executive",
+    "Health Executive", "Operations Executive", "Sales Executive",
+    "Product & Engineering", "DevOps", "Graphic Design", "Product Design",
+    "Web Design", "Information Technology", "Project Engineering",
+    "Quality Assurance", "Mechanical Engineering", "Electrical Engineering",
+    "Data Science", "Software Development", "Web Development",
+    "Information Security", "Network Operations", "Systems Administration",
+    "Product Management", "Artificial Intelligence / Machine Learning",
+    "Digital Transformation", "Finance", "Accounting", "Tax",
+    "Investment Management", "Financial Planning & Analysis", "Risk",
+    "Financial Reporting", "Investor Relations", "Financial Strategy",
+    "Internal Audit & Control", "HR", "Recruiting", "Compensation & Benefits",
+    "Learning & Development", "Diversity & Inclusion", "Employee & Labor Relations",
+    "Talent Management", "Legal", "Legal Counsel", "Compliance", "Contracts",
+    "Corporate Secretary", "Litigation", "Privacy", "Paralegal", "Judicial",
+    "Marketing", "Content Marketing", "Product Marketing", "Brand Management",
+    "Public Relations (PR)", "Event Marketing", "Advertising", "Customer Experience",
+    "Demand Generation", "Digital Marketing", "Search Engine Optimization (SEO)",
+    "Social Media Marketing", "Broadcasting", "Editorial", "Journalism",
+    "Video", "Writing", "Health", "Dental", "Doctor", "Fitness", "Nursing",
+    "Therapy", "Wellness", "Medical Administration", "Medical Education & Training",
+    "Medical Research", "Clinical Operations", "Operations", "Logistics",
+    "Project Management", "Office Operations", "Customer Service / Support",
+    "Product", "Call Center", "Corporate Strategy", "Facilities Management",
+    "Quality Management", "Supply Chain", "Manufacturing", "Real Estate",
+    "Sales", "Business Development", "Customer Success", "Account Management",
+    "Channel Sales", "Inside Sales", "Sales Enablement", "Sales Operations",
+    "Pipeline", "Education", "Administration", "Professor", "Teacher", "Researcher"
+]
+
+MANAGEMENT_LEVELS = [
+    "Founder/Owner", "C-Level", "Vice President", "Head", "Director",
+    "Manager", "Senior", "Individual Contributor", "Entry", "Intern", "Volunteer"
+]
+
 class RocketReachAPI:
     def __init__(self, api_key: str, strict_backoff: bool = True):
         self.api_key = api_key
@@ -28,17 +66,15 @@ class RocketReachAPI:
 
     def _rate_limit_check(self):
         now = time.time()
-        # Zachowaj tylko timestampy z ostatniej sekundy
         self.request_timestamps = [t for t in self.request_timestamps if t > now - 1]
         if len(self.request_timestamps) >= 5:
-            sleep_time = 1.0 - (now - self.request_timestamps[0])
+            sleep_time = 1.0 - (now - self.request_timestamps)
             if sleep_time > 0:
                 time.sleep(sleep_time + random.uniform(0.1, 0.3))
         self.request_timestamps.append(time.time())
 
     def _handle_rate_limit(self, resp: requests.Response) -> bool:
         if resp.status_code == 429:
-            # Odczytaj dokładny czas oczekiwania z JSON.wait lub nagłówka Retry-After
             retry_after = None
             try:
                 retry_after = float(resp.json().get("wait"))
@@ -52,13 +88,15 @@ class RocketReachAPI:
             return True
         return False
 
-    def _search(self, domain: str, field: str, values: List[str], exclude: List[str]) -> List[Dict]:
+    def _search(self, domain: str, field: str, values: List[str], exclude: List[str], 
+                management_levels: List[str] = None, country: str = None) -> List[Dict]:
         self._rate_limit_check()
         if not domain.startswith(("http://", "https://")):
             domain = "https://" + domain
         clean_values = [v.strip() for v in values if v.strip()]
         if not clean_values:
             return []
+        
         payload = {
             "query": {
                 "company_domain": [domain],
@@ -67,9 +105,19 @@ class RocketReachAPI:
             "start": 1,
             "page_size": 50
         }
+        
+        # Dodaj wykluczenia
         if exclude:
             exclude_field = f"exclude_{field}" if field != "skills" else "exclude_current_title"
             payload["query"][exclude_field] = [e.strip() for e in exclude if e.strip()]
+        
+        # Dodaj management levels jeśli wybrane
+        if management_levels:
+            payload["query"]["management_level"] = management_levels
+        
+        # Dodaj filtr kraju jeśli podany
+        if country:
+            payload["query"]["country"] = [country.strip()]
 
         for _ in range(3):
             resp = requests.post(f"{self.base_url}/person/search", headers=self.headers, json=payload)
@@ -107,7 +155,6 @@ class RocketReachAPI:
 
     def _process(self, data: Dict) -> Dict:
         grade_order = {"A": 1, "A-": 2, "B": 3, "B-": 4, "C": 5, "D": 6, "F": 7}
-        # Wybór emaila
         email = data.get("recommended_professional_email") or data.get("current_work_email")
         if not email:
             professional_emails = [
@@ -117,7 +164,7 @@ class RocketReachAPI:
             if not professional_emails:
                 return {}
             professional_emails.sort(key=lambda e: grade_order.get(e.get("grade", "F"), 99))
-            email_obj = professional_emails[0]
+            email_obj = professional_emails
         else:
             email_obj = next((e for e in data.get("emails", []) if e.get("email") == email), {})
 
@@ -133,38 +180,79 @@ class RocketReachAPI:
             "linkedin": data.get("linkedin_url", "")
         }
 
-    def search_with_emails(self, domain: str, titles: List[str], exclude: List[str]) -> List[Dict]:
+    def search_with_emails(self, domain: str, titles: List[str], departments: List[str], 
+                          exclude: List[str], management_levels: List[str], country: str) -> List[Dict]:
         valid_contacts = []
 
-        # ETAP 1: wyszukiwanie po stanowiskach
-        st.info("🔍 Etap 1: wyszukiwanie po stanowiskach...")
-        candidates = self._search(domain, "current_title", titles, exclude)
-        for c in candidates:
-            if len(valid_contacts) >= 3:
-                break
-            detail = self._lookup(c["id"])
-            processed = self._process(detail)
-            if processed:
-                valid_contacts.append(processed)
-                st.success(
-                    f"✅ Znaleziono kontakt: {processed['name']} ({processed['title']}) | "
-                    f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
-                )
+        # ETAP 1: Keywords stanowisk
+        if titles:
+            st.info("🔍 Etap 1: wyszukiwanie po keywords stanowisk...")
+            candidates = self._search(domain, "current_title", titles, exclude, management_levels, country)
+            for c in candidates:
+                if len(valid_contacts) >= 3:
+                    break
+                detail = self._lookup(c["id"])
+                processed = self._process(detail)
+                if processed:
+                    valid_contacts.append(processed)
+                    st.success(
+                        f"✅ Kontakt (keywords): {processed['name']} ({processed['title']}) | "
+                        f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
+                    )
 
-        # ETAP 2: wyszukiwanie po skills, jeśli mniej niż 3
-        if len(valid_contacts) < 3:
-            st.info("🎯 Etap 2: rozszerzone wyszukiwanie (skills)...")
-            candidates2 = self._search(domain, "skills", titles, exclude)
+        # ETAP 2: Departments
+        if len(valid_contacts) < 3 and departments:
+            st.info("🔍 Etap 2: wyszukiwanie po departments...")
+            candidates = self._search(domain, "department", departments, exclude, management_levels, country)
             seen_emails = {c["email"] for c in valid_contacts}
-            for c in candidates2:
+            for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
                 detail = self._lookup(c["id"])
                 processed = self._process(detail)
                 if processed and processed["email"] not in seen_emails:
                     valid_contacts.append(processed)
+                    seen_emails.add(processed["email"])
                     st.success(
-                        f"✅ Znaleziono kontakt: {processed['name']} ({processed['title']}) | "
+                        f"✅ Kontakt (department): {processed['name']} ({processed['title']}) | "
+                        f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
+                    )
+
+        # ETAP 3: Skills (te same keywords co stanowiska)
+        if len(valid_contacts) < 3 and titles:
+            st.info("🎯 Etap 3: wyszukiwanie po skills...")
+            candidates = self._search(domain, "skills", titles, exclude, management_levels, country)
+            seen_emails = {c["email"] for c in valid_contacts}
+            for c in candidates:
+                if len(valid_contacts) >= 3:
+                    break
+                detail = self._lookup(c["id"])
+                processed = self._process(detail)
+                if processed and processed["email"] not in seen_emails:
+                    valid_contacts.append(processed)
+                    seen_emails.add(processed["email"])
+                    st.success(
+                        f"✅ Kontakt (skills): {processed['name']} ({processed['title']}) | "
+                        f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
+                    )
+
+        # ETAP 4: Management Levels (founder/c-level)
+        if len(valid_contacts) < 3:
+            st.info("👔 Etap 4: wyszukiwanie po management levels...")
+            # Użyj Founder/Owner i C-Level jako domyślne jeśli nic nie wybrano
+            default_levels = ["Founder/Owner", "C-Level"] if not management_levels else management_levels
+            candidates = self._search(domain, "management_level", default_levels, exclude, None, country)
+            seen_emails = {c["email"] for c in valid_contacts}
+            for c in candidates:
+                if len(valid_contacts) >= 3:
+                    break
+                detail = self._lookup(c["id"])
+                processed = self._process(detail)
+                if processed and processed["email"] not in seen_emails:
+                    valid_contacts.append(processed)
+                    seen_emails.add(processed["email"])
+                    st.success(
+                        f"✅ Kontakt (management): {processed['name']} ({processed['title']}) | "
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
                     )
 
@@ -182,19 +270,49 @@ def create_excel(results_df: pd.DataFrame) -> bytes:
 def main():
     st.set_page_config(page_title="🎯 Wyszukiwanie kontaktów", layout="wide")
     st.title("🎯 Wyszukiwanie kontaktów do inwestorów")
+    
     with st.sidebar:
+        st.header("⚙️ Konfiguracja")
+        
         api_key = st.text_input("RocketReach API Key", type="password")
+        
+        st.subheader("1️⃣ Keywords stanowisk")
         titles = st.text_area(
-            "Nazwy stanowisk (jedna linia = jeden tytuł)",
-            "M&A\ncorporate development\nstrategy\ngrowth\nMerger\nM and A\nstrategic\ninvestment\nfinancial\nfinance\nCFO\nCEO\nAcquisitions\nOrigination\nChief Financial Officer\nChief Executive Officer\nChief Strategy Officer\nCSO"
+            "Nazwy stanowisk (jedna linia = jeden keyword)",
+            "M&A\ncorporate development\nstrategy",
+            height=100
         ).splitlines()
+        
+        st.subheader("2️⃣ Departments")
+        selected_departments = st.multiselect(
+            "Wybierz departments (można wybrać wiele)",
+            options=DEPARTMENTS,
+            default=[]
+        )
+        
+        st.subheader("Wykluczenia")
         exclude = st.text_area(
-            "Nazwy stanowisk do wykluczenia (jedna linia = jeden tytuł)",
-            "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nintern\nanalyst\nAccount\nDeveloper\nCommercial\nStudent\nEngineer\nReporting\nSourcing\nController\nService\nPurchaser\ncustomer\nemployee"
+            "Stanowiska do wykluczenia (jedna linia = jedno stanowisko)",
+            "hr\nmarketing\nsales",
+            height=80
         ).splitlines()
+        
+        st.subheader("🎯 Dodatkowe filtry")
+        
+        selected_management_levels = st.multiselect(
+            "Management Levels (puste = bez ograniczeń)",
+            options=MANAGEMENT_LEVELS,
+            default=[]
+        )
+        
+        country = st.text_input(
+            "Kraj (puste = bez ograniczeń)",
+            placeholder="np. Poland, United States"
+        )
 
     source = st.radio("Źródło domen", ["CSV", "Manual"])
     domains: List[str] = []
+    
     if source == "CSV":
         uploaded = st.file_uploader("Wgraj plik CSV z domenami", type="csv")
         if uploaded:
@@ -214,8 +332,16 @@ def main():
         rr = RocketReachAPI(api_key)
         results = []
         progress = st.progress(0)
+        
         for idx, domain in enumerate(domains):
-            contacts = rr.search_with_emails(domain, titles, exclude)
+            contacts = rr.search_with_emails(
+                domain, 
+                titles, 
+                selected_departments,
+                exclude, 
+                selected_management_levels if selected_management_levels else None,
+                country if country.strip() else None
+            )
             row = {"Website": domain, "Status": f"Znaleziono {len(contacts)} kontakt(ów)"}
             for i in range(1, 4):
                 c = contacts[i - 1] if i - 1 < len(contacts) else {}
@@ -234,6 +360,19 @@ def main():
         df_out = pd.DataFrame(results)
         st.subheader("📋 Wyniki wyszukiwania")
         st.dataframe(df_out, use_container_width=True)
+        
+        # Statystyki
+        st.subheader("📊 Statystyki")
+        total_contacts = sum(1 for r in results for i in range(1, 4) if r.get(f"Email {i}"))
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Przeanalizowane firmy", len(domains))
+        with col2:
+            st.metric("Znalezione kontakty", total_contacts)
+        with col3:
+            firms_with_contacts = sum(1 for r in results if "Znaleziono" in r["Status"] and int(r["Status"].split()[1]) > 0)
+            st.metric("Firmy z kontaktami", firms_with_contacts)
+        
         excel_data = create_excel(df_out)
         st.download_button(
             "📥 Pobierz wyniki jako Excel",
@@ -245,5 +384,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
