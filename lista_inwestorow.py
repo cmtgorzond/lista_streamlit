@@ -312,7 +312,7 @@ def main():
         st.subheader("1️⃣ Keywords stanowisk")
         titles = st.text_area(
             "Nazwy stanowisk (jedna linia = jeden keyword)",
-            "M&A\ncorporate development\nstrategy\ngrowth\nMerger\nM and A\nstrategic\ninvestment\nfinancial\nfinance\nAcquisitions\nOrigination\ninvestor,
+            "M&A\ncorporate development\nstrategy\ngrowth\nMerger\nM and A\nstrategic\ninvestment\nfinancial\nfinance\nAcquisitions\nOrigination\ninvestor",
         ).splitlines()
         
         st.subheader("2️⃣ Departments")
@@ -325,7 +325,7 @@ def main():
         st.subheader("Wykluczenia")
         exclude = st.text_area(
             "Stanowiska do wykluczenia (jedna linia = jedno stanowisko)",
-            "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nintern\nanalyst\nAccount\nDeveloper\nCommercial\nStudent\nEngineer\nReporting\nSourcing\nController\nService\nPurchaser\ncustomer\nemployee",
+            "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nAccount\nDeveloper\nCommercial\nEngineer\nReporting\nSourcing\nController\nService\nPurchaser\ncustomer\nemployee\npricing",
             height=80
         ).splitlines()
         
@@ -418,6 +418,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
