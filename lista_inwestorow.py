@@ -340,9 +340,6 @@ def main():
             key="filter_management_levels"
         )
         
-        st.markdown("**Etap 4 (Management Levels)** - stały filtr:")
-        st.markdown("🔒 Founder/Owner, C-Level, Vice President (bez możliwości edycji)")
-        
         country = st.text_input(
             "Kod kraju (puste = bez ograniczeń)",
             placeholder="np. US, PL, GB"
@@ -422,4 +419,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
