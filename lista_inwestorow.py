@@ -332,9 +332,9 @@ def main():
         
         st.subheader("🎯 Dodatkowe filtry")
         
-        st.markdown("**Management Levels** - dla etapów 1-3 (do edycji)")
+        st.markdown("**Management Levels**")
         selected_management_levels = st.multiselect(
-            "Wybierz management levels do filtrowania etapów 1-3",
+            "Wybierz management levels",
             options=MANAGEMENT_LEVELS,
             default=DEFAULT_MANAGEMENT_LEVELS,
             key="filter_management_levels"
@@ -422,3 +422,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
