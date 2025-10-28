@@ -54,9 +54,14 @@ MANAGEMENT_LEVELS = [
 
 # Domyślnie zaznaczone departments
 DEFAULT_DEPARTMENTS = [
-    "Founder", "Finance Executive", "Operations Executive", "Executive", "Finance",
+    "Founder", "Finance Executive", "Executive", "Finance",
     "Investment Management", "Financial Planning & Analysis",
     "Financial Reporting", "Financial Strategy"
+]
+
+# Domyślnie zaznaczone management levels
+DEFAULT_MANAGEMENT_LEVELS = [
+    "Founder/Owner", "C-Level", "Vice President", "Head", "Director", "Manager", "Senior"
 ]
 
 class RocketReachAPI:
@@ -264,8 +269,8 @@ class RocketReachAPI:
         # ETAP 4: Management Levels (founder/c-level)
         if len(valid_contacts) < 3:
             st.info("👔 Etap 4: wyszukiwanie po management levels...")
-            # Użyj Founder/Owner i C-Level jako domyślne jeśli nic nie wybrano
-            default_levels = ["Founder/Owner", "C-Level"] if not management_levels else management_levels
+            # Użyj domyślne levele jeśli nic nie wybrano
+            default_levels = DEFAULT_MANAGEMENT_LEVELS if not management_levels else management_levels
             candidates = self._search(domain, "management_levels", default_levels, exclude, None, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
@@ -324,9 +329,9 @@ def main():
         st.subheader("🎯 Dodatkowe filtry")
         
         selected_management_levels = st.multiselect(
-            "Management Levels (puste = domyślnie Founder/Owner + C-Level)",
+            "Management Levels (można wybrać wiele)",
             options=MANAGEMENT_LEVELS,
-            default=[]
+            default=DEFAULT_MANAGEMENT_LEVELS
         )
         
         country = st.text_input(
@@ -408,4 +413,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
