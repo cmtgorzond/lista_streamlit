@@ -312,8 +312,7 @@ def main():
         st.subheader("1️⃣ Keywords stanowisk")
         titles = st.text_area(
             "Nazwy stanowisk (jedna linia = jeden keyword)",
-            "M&A\ncorporate development\nstrategy\ngrowth\nMerger\nM and A\nstrategic\ninvestment\nfinancial\nfinance\nCFO\nCEO\nAcquisitions\nOrigination\nChief Financial Officer\nChief Executive Officer\nChief Strategy Officer\nCSO",
-            height=100
+            "M&A\ncorporate development\nstrategy\ngrowth\nMerger\nM and A\nstrategic\ninvestment\nfinancial\nfinance\nAcquisitions\nOrigination\ninvestor,
         ).splitlines()
         
         st.subheader("2️⃣ Departments")
@@ -419,5 +418,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
