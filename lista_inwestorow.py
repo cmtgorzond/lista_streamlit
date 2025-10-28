@@ -52,6 +52,13 @@ MANAGEMENT_LEVELS = [
     "Manager", "Senior", "Individual Contributor", "Entry", "Intern", "Volunteer"
 ]
 
+# Domyślnie zaznaczone departments
+DEFAULT_DEPARTMENTS = [
+    "Founder", "Finance Executive", "Executive", "Finance",
+    "Investment Management", "Financial Planning & Analysis",
+    "Financial Reporting", "Financial Strategy"
+]
+
 class RocketReachAPI:
     def __init__(self, api_key: str, strict_backoff: bool = True):
         self.api_key = api_key
@@ -304,7 +311,7 @@ def main():
         selected_departments = st.multiselect(
             "Wybierz departments (można wybrać wiele)",
             options=DEPARTMENTS,
-            default=[]
+            default=DEFAULT_DEPARTMENTS
         )
         
         st.subheader("Wykluczenia")
