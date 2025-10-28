@@ -97,29 +97,43 @@ class RocketReachAPI:
         if not clean_values:
             return []
         
+        # Podstawowa struktura query
         payload = {
             "query": {
-                "company_domain": [domain],
-                field: clean_values
+                "company_domain": [domain]
             },
             "start": 1,
             "page_size": 50
         }
         
+        # Dodaj główne pole wyszukiwania
+        if field == "current_title":
+            payload["query"]["current_title"] = clean_values
+        elif field == "skills":
+            payload["query"]["skills"] = clean_values
+        elif field == "department":
+            payload["query"]["department"] = clean_values
+        elif field == "management_level":
+            payload["query"]["management_level"] = clean_values
+        else:
+            payload["query"][field] = clean_values
+        
         # Dodaj wykluczenia
         if exclude:
-            exclude_field = f"exclude_{field}" if field != "skills" else "exclude_current_title"
-            payload["query"][exclude_field] = [e.strip() for e in exclude if e.strip()]
+            if field == "current_title":
+                payload["query"]["exclude_current_title"] = [e.strip() for e in exclude if e.strip()]
+            elif field == "skills":
+                payload["query"]["exclude_skills"] = [e.strip() for e in exclude if e.strip()]
         
-        # Dodaj management levels jeśli wybrane
-        if management_levels:
+        # Dodaj management levels jeśli wybrane (jako dodatkowy filtr)
+        if management_levels and field != "management_level":
             payload["query"]["management_level"] = management_levels
         
         # Dodaj filtr kraju jeśli podany
         if country:
-            payload["query"]["country"] = [country.strip()]
+            payload["query"]["country"] = country.strip()
 
-        for _ in range(3):
+        for attempt in range(3):
             resp = requests.post(f"{self.base_url}/person/search", headers=self.headers, json=payload)
             if self._handle_rate_limit(resp):
                 continue
@@ -134,8 +148,16 @@ class RocketReachAPI:
                     }
                     for p in profiles[:15]
                 ]
-            st.error(f"Search API error {resp.status_code}")
-            break
+            elif resp.status_code == 400:
+                try:
+                    error_msg = resp.json()
+                    st.error(f"Search API error 400: {error_msg}")
+                except:
+                    st.error(f"Search API error 400: Bad request")
+                return []
+            else:
+                st.error(f"Search API error {resp.status_code}")
+                break
         return []
 
     def _lookup(self, person_id: int) -> Dict:
@@ -154,8 +176,13 @@ class RocketReachAPI:
         return {}
 
     def _process(self, data: Dict) -> Dict:
+        if not data:
+            return {}
+        
         grade_order = {"A": 1, "A-": 2, "B": 3, "B-": 4, "C": 5, "D": 6, "F": 7}
         email = data.get("recommended_professional_email") or data.get("current_work_email")
+        email_obj = {}
+        
         if not email:
             professional_emails = [
                 e for e in data.get("emails", [])
@@ -164,9 +191,10 @@ class RocketReachAPI:
             if not professional_emails:
                 return {}
             professional_emails.sort(key=lambda e: grade_order.get(e.get("grade", "F"), 99))
-            email_obj = professional_emails
+            email_obj = professional_emails[0]
         else:
-            email_obj = next((e for e in data.get("emails", []) if e.get("email") == email), {})
+            email_obj = next((e for e in data.get("emails", []) if e.get("email") == email), 
+                           {"email": email, "grade": "", "smtp_valid": ""})
 
         if email_obj.get("smtp_valid") == "invalid":
             return {}
@@ -183,9 +211,10 @@ class RocketReachAPI:
     def search_with_emails(self, domain: str, titles: List[str], departments: List[str], 
                           exclude: List[str], management_levels: List[str], country: str) -> List[Dict]:
         valid_contacts = []
+        seen_emails = set()
 
         # ETAP 1: Keywords stanowisk
-        if titles:
+        if titles and len(valid_contacts) < 3:
             st.info("🔍 Etap 1: wyszukiwanie po keywords stanowisk...")
             candidates = self._search(domain, "current_title", titles, exclude, management_levels, country)
             for c in candidates:
@@ -193,8 +222,9 @@ class RocketReachAPI:
                     break
                 detail = self._lookup(c["id"])
                 processed = self._process(detail)
-                if processed:
+                if processed and processed["email"] not in seen_emails:
                     valid_contacts.append(processed)
+                    seen_emails.add(processed["email"])
                     st.success(
                         f"✅ Kontakt (keywords): {processed['name']} ({processed['title']}) | "
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
@@ -204,7 +234,6 @@ class RocketReachAPI:
         if len(valid_contacts) < 3 and departments:
             st.info("🔍 Etap 2: wyszukiwanie po departments...")
             candidates = self._search(domain, "department", departments, exclude, management_levels, country)
-            seen_emails = {c["email"] for c in valid_contacts}
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -222,7 +251,6 @@ class RocketReachAPI:
         if len(valid_contacts) < 3 and titles:
             st.info("🎯 Etap 3: wyszukiwanie po skills...")
             candidates = self._search(domain, "skills", titles, exclude, management_levels, country)
-            seen_emails = {c["email"] for c in valid_contacts}
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -242,7 +270,6 @@ class RocketReachAPI:
             # Użyj Founder/Owner i C-Level jako domyślne jeśli nic nie wybrano
             default_levels = ["Founder/Owner", "C-Level"] if not management_levels else management_levels
             candidates = self._search(domain, "management_level", default_levels, exclude, None, country)
-            seen_emails = {c["email"] for c in valid_contacts}
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -279,7 +306,7 @@ def main():
         st.subheader("1️⃣ Keywords stanowisk")
         titles = st.text_area(
             "Nazwy stanowisk (jedna linia = jeden keyword)",
-           "M&A\ncorporate development\nstrategy\ngrowth\nMerger\nM and A\nstrategic\ninvestment\nfinancial\nfinance\nCFO\nCEO\nAcquisitions\nOrigination\nChief Financial Officer\nChief Executive Officer\nChief Strategy Officer\nCSO",
+            "M&A\ncorporate development\nstrategy\ngrowth\nMerger\nM and A\nstrategic\ninvestment\nfinancial\nfinance\nCFO\nCEO\nAcquisitions\nOrigination\nChief Financial Officer\nChief Executive Officer\nChief Strategy Officer\nCSO",
             height=100
         ).splitlines()
         
@@ -384,4 +411,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
