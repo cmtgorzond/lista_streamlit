@@ -47,6 +47,11 @@ DEPARTMENTS = [
     "Pipeline", "Education", "Administration", "Professor", "Teacher", "Researcher"
 ]
 
+MANAGEMENT_LEVELS = [
+    "Founder/Owner", "C-Level", "Vice President", "Head", "Director",
+    "Manager", "Senior", "Individual Contributor", "Entry", "Intern", "Volunteer"
+]
+
 # Domyślnie zaznaczone departments
 DEFAULT_DEPARTMENTS = [
     "Founder", "Finance Executive", "Executive", "Finance",
@@ -58,7 +63,6 @@ DEFAULT_DEPARTMENTS = [
 DEFAULT_MANAGEMENT_LEVELS = [
     "Founder/Owner", "C-Level", "Vice President", "Head", "Director", "Manager", "Senior"
 ]
-
 
 class RocketReachAPI:
     def __init__(self, api_key: str, strict_backoff: bool = True):
@@ -76,7 +80,7 @@ class RocketReachAPI:
         now = time.time()
         self.request_timestamps = [t for t in self.request_timestamps if t > now - 1]
         if len(self.request_timestamps) >= 5:
-            sleep_time = 1.0 - (now - self.request_timestamps[0])
+            sleep_time = 1.0 - (now - self.request_timestamps)
             if sleep_time > 0:
                 time.sleep(sleep_time + random.uniform(0.1, 0.3))
         self.request_timestamps.append(time.time())
@@ -105,6 +109,7 @@ class RocketReachAPI:
         if not clean_values:
             return []
         
+        # Podstawowa struktura query
         payload = {
             "query": {
                 "company_domain": [domain]
@@ -113,15 +118,19 @@ class RocketReachAPI:
             "page_size": 50
         }
         
+        # Dodaj główne pole wyszukiwania
         payload["query"][field] = clean_values
         
+        # Dodaj wykluczenia
         if exclude and field in ["current_title", "skills"]:
             exclude_field = f"exclude_{field}"
             payload["query"][exclude_field] = [e.strip() for e in exclude if e.strip()]
         
+        # Dodaj management levels jeśli wybrane (jako dodatkowy filtr dla wszystkich etapów)
         if management_levels and field != "management_levels":
             payload["query"]["management_levels"] = management_levels
         
+        # Dodaj filtr kraju jeśli podany
         if country:
             payload["query"]["company_country_code"] = [country.strip()]
 
@@ -138,7 +147,7 @@ class RocketReachAPI:
                         "title": p.get("current_title", ""),
                         "linkedin": p.get("linkedin_url", "")
                     }
-                    for p in profiles[:15]
+                    for p in profiles[:15]  # Limit na 15 profili
                 ]
             elif resp.status_code == 400:
                 try:
@@ -201,15 +210,16 @@ class RocketReachAPI:
         }
 
     def search_with_emails(self, domain: str, titles: List[str], departments: List[str], 
-                          exclude: List[str], country: Optional[str]) -> List[Dict]:
+                          exclude: List[str], management_levels_filter: Optional[List[str]], 
+                          country: Optional[str]) -> List[Dict]:
         valid_contacts = []
         seen_emails = set()
 
-        # ETAP 1: Keywords stanowisk
+        # ETAP 1: Keywords stanowisk (z filtrem management_levels)
         if titles and len(valid_contacts) < 3:
             st.info("🔍 Etap 1: wyszukiwanie po keywords stanowisk...")
             candidates = self._search(domain, "current_title", titles, exclude, 
-                                     DEFAULT_MANAGEMENT_LEVELS, country)
+                                     management_levels_filter, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -223,11 +233,11 @@ class RocketReachAPI:
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
                     )
 
-        # ETAP 2: Departments
+        # ETAP 2: Departments (z filtrem management_levels)
         if len(valid_contacts) < 3 and departments:
             st.info("🔍 Etap 2: wyszukiwanie po departments...")
             candidates = self._search(domain, "department", departments, exclude, 
-                                     DEFAULT_MANAGEMENT_LEVELS, country)
+                                     management_levels_filter, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -241,11 +251,11 @@ class RocketReachAPI:
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
                     )
 
-        # ETAP 3: Skills
+        # ETAP 3: Skills (z filtrem management_levels)
         if len(valid_contacts) < 3 and titles:
             st.info("🎯 Etap 3: wyszukiwanie po skills...")
             candidates = self._search(domain, "skills", titles, exclude, 
-                                     DEFAULT_MANAGEMENT_LEVELS, country)
+                                     management_levels_filter, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -259,11 +269,13 @@ class RocketReachAPI:
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
                     )
 
-        # ETAP 4: Management Levels
+        # ETAP 4: Management Levels - STAŁY FILTR (Founder/Owner, C-Level, Vice President)
         if len(valid_contacts) < 3:
-            st.info("👔 Etap 4: wyszukiwanie po management levels...")
+            st.info("👔 Etap 4: wyszukiwanie po management levels (Founder/Owner, C-Level, Vice President)...")
+            # Etap 4 ma stały filtr bez możliwości edycji
             fixed_levels = ["Founder/Owner", "C-Level", "Vice President"]
-            candidates = self._search(domain, "management_levels", fixed_levels, exclude, None, country)
+            candidates = self._search(domain, "management_levels", fixed_levels, exclude, 
+                                     None, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -320,14 +332,21 @@ def main():
         
         st.subheader("🎯 Dodatkowe filtry")
         
+        st.markdown("**Management Levels** - dla etapów 1-3 (do edycji)")
+        selected_management_levels = st.multiselect(
+            "Wybierz management levels do filtrowania etapów 1-3",
+            options=MANAGEMENT_LEVELS,
+            default=DEFAULT_MANAGEMENT_LEVELS,
+            key="filter_management_levels"
+        )
+        
+        st.markdown("**Etap 4 (Management Levels)** - stały filtr:")
+        st.markdown("🔒 Founder/Owner, C-Level, Vice President (bez możliwości edycji)")
+        
         country = st.text_input(
             "Kod kraju (puste = bez ograniczeń)",
             placeholder="np. US, PL, GB"
         )
-        
-        st.markdown("---")
-        st.markdown("**Etap 4 (Management Levels)** - stały filtr:")
-        st.markdown("🔒 Founder/Owner, C-Level, Vice President (bez możliwości edycji)")
 
     source = st.radio("Źródło domen", ["CSV", "Manual"])
     domains: List[str] = []
@@ -358,6 +377,7 @@ def main():
                 titles, 
                 selected_departments,
                 exclude, 
+                selected_management_levels if selected_management_levels else None,
                 country if country.strip() else None
             )
             row = {"Website": domain, "Status": f"Znaleziono {len(contacts)} kontakt(ów)"}
@@ -379,6 +399,7 @@ def main():
         st.subheader("📋 Wyniki wyszukiwania")
         st.dataframe(df_out, use_container_width=True)
         
+        # Statystyki
         st.subheader("📊 Statystyki")
         total_contacts = sum(1 for r in results for i in range(1, 4) if r.get(f"Email {i}"))
         col1, col2, col3 = st.columns(3)
