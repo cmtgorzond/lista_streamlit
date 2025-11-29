@@ -55,7 +55,7 @@ MANAGEMENT_LEVELS = [
 # Domyślnie zaznaczone departments
 DEFAULT_DEPARTMENTS = [
     "Founder", "Finance Executive",
-    "Investment Management", "Financial Planning & Analysis", "Financial Strategy", "Operations Executive"
+    "Investment Management", "Financial Planning & Analysis", "Financial Strategy", "Operations Executive", "Corporate Strategy"
 ]
 
 # Domyślnie zaznaczone management levels dla filtrowania etapów 1-3
@@ -72,6 +72,35 @@ SKILLS_FOR_SEARCH = [
     "investment",
     "Acquisitions",
     "investor"
+]
+
+# Departments do wykluczenia na każdym etapie
+DEPARTMENTS_TO_EXCLUDE = [
+    "Product & Engineering Executive", "HR Executive", "Legal Executive", "Marketing Executive",
+    "Health Executive", "Sales Executive",
+    "Product & Engineering", "DevOps", "Graphic Design", "Product Design",
+    "Web Design", "Information Technology", "Project Engineering",
+    "Quality Assurance", "Mechanical Engineering", "Electrical Engineering",
+    "Data Science", "Software Development", "Web Development",
+    "Information Security", "Network Operations", "Systems Administration",
+    "Product Management", "Artificial Intelligence / Machine Learning",
+    "HR", "Recruiting", "Compensation & Benefits",
+    "Learning & Development", "Diversity & Inclusion", "Employee & Labor Relations",
+    "Talent Management", "Legal", "Legal Counsel", "Compliance",
+    "Corporate Secretary", "Litigation", "Privacy", "Paralegal", "Judicial",
+    "Marketing", "Content Marketing", "Product Marketing", "Brand Management",
+    "Public Relations (PR)", "Event Marketing", "Advertising", "Customer Experience",
+    "Demand Generation", "Digital Marketing", "Search Engine Optimization (SEO)",
+    "Social Media Marketing", "Broadcasting", "Editorial", "Journalism",
+    "Video", "Writing", "Health", "Dental", "Doctor", "Fitness", "Nursing",
+    "Therapy", "Wellness", "Medical Administration", "Medical Education & Training",
+    "Medical Research", "Clinical Operations", "Operations", "Logistics",
+    "Project Management", "Office Operations", "Customer Service / Support",
+    "Product", "Call Center", "Facilities Management",
+    "Quality Management", "Supply Chain", "Manufacturing", "Real Estate",
+    "Sales", "Customer Success", "Account Management",
+    "Channel Sales", "Inside Sales", "Sales Enablement", "Sales Operations",
+    "Pipeline", "Education", "Administration", "Professor", "Teacher", "Researcher"
 ]
 
 class RocketReachAPI:
@@ -111,7 +140,8 @@ class RocketReachAPI:
         return False
 
     def _search(self, domain: str, field: str, values: List[str], exclude: List[str], 
-                management_levels: Optional[List[str]] = None, country: Optional[str] = None) -> List[Dict]:
+                exclude_departments: List[str], management_levels: Optional[List[str]] = None, 
+                country: Optional[str] = None) -> List[Dict]:
         self._rate_limit_check()
         if not domain.startswith(("http://", "https://")):
             domain = "https://" + domain
@@ -131,15 +161,18 @@ class RocketReachAPI:
         # Dodaj główne pole wyszukiwania
         payload["query"][field] = clean_values
         
-        # Dodaj wykluczenia dla wszystkich etapów
+        # Dodaj wykluczenia (stanowiska)
         if exclude:
             if field == "current_title":
                 payload["query"]["exclude_current_title"] = [e.strip() for e in exclude if e.strip()]
             elif field == "skills":
                 payload["query"]["exclude_skills"] = [e.strip() for e in exclude if e.strip()]
             elif field == "management_levels":
-                # Dla etapu 4 - też dodaj exclude_current_title
                 payload["query"]["exclude_current_title"] = [e.strip() for e in exclude if e.strip()]
+        
+        # Dodaj wykluczenia departments na każdym etapie
+        if exclude_departments:
+            payload["query"]["exclude_department"] = [d.strip() for d in exclude_departments if d.strip()]
         
         # Dodaj management levels jeśli wybrane (jako dodatkowy filtr dla etapów 1-3)
         if management_levels and field != "management_levels":
@@ -234,7 +267,7 @@ class RocketReachAPI:
         if titles and len(valid_contacts) < 3:
             st.info("🔍 Etap 1: wyszukiwanie po keywords stanowisk...")
             candidates = self._search(domain, "current_title", titles, exclude, 
-                                     management_levels_filter, country)
+                                     DEPARTMENTS_TO_EXCLUDE, management_levels_filter, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -252,7 +285,7 @@ class RocketReachAPI:
         if len(valid_contacts) < 3 and departments:
             st.info("🔍 Etap 2: wyszukiwanie po departments...")
             candidates = self._search(domain, "department", departments, exclude, 
-                                     management_levels_filter, country)
+                                     DEPARTMENTS_TO_EXCLUDE, management_levels_filter, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -270,7 +303,7 @@ class RocketReachAPI:
         if len(valid_contacts) < 3 and SKILLS_FOR_SEARCH:
             st.info("🎯 Etap 3: wyszukiwanie po skills...")
             candidates = self._search(domain, "skills", SKILLS_FOR_SEARCH, exclude, 
-                                     management_levels_filter, country)
+                                     DEPARTMENTS_TO_EXCLUDE, management_levels_filter, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -287,10 +320,9 @@ class RocketReachAPI:
         # ETAP 4: Management Levels - STAŁY FILTR (Founder/Owner, C-Level, Vice President)
         if len(valid_contacts) < 3:
             st.info("👔 Etap 4: wyszukiwanie po management levels (Founder/Owner, C-Level, Vice President)...")
-            # Etap 4 ma stały filtr bez możliwości edycji
             fixed_levels = ["Founder/Owner", "C-Level", "Vice President"]
             candidates = self._search(domain, "management_levels", fixed_levels, exclude, 
-                                     None, country)
+                                     DEPARTMENTS_TO_EXCLUDE, None, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
