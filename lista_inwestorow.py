@@ -63,7 +63,7 @@ DEFAULT_MANAGEMENT_LEVELS = [
     "Founder/Owner", "C-Level", "Vice President", "Head", "Director", "Manager", "Senior"
 ]
 
-# Skills do wyszukiwania w etapie 3
+# Skills do wyszukiwania w etapie 2
 SKILLS_FOR_SEARCH = [
     "M&A",
     "corporate development",
@@ -281,27 +281,9 @@ class RocketReachAPI:
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
                     )
 
-        # ETAP 2: Departments (z filtrem management_levels)
-        if len(valid_contacts) < 3 and departments:
-            st.info("🔍 Etap 2: wyszukiwanie po departments...")
-            candidates = self._search(domain, "department", departments, exclude, 
-                                     DEPARTMENTS_TO_EXCLUDE, management_levels_filter, country)
-            for c in candidates:
-                if len(valid_contacts) >= 3:
-                    break
-                detail = self._lookup(c["id"])
-                processed = self._process(detail)
-                if processed and processed["email"] not in seen_emails:
-                    valid_contacts.append(processed)
-                    seen_emails.add(processed["email"])
-                    st.success(
-                        f"✅ Kontakt (department): {processed['name']} ({processed['title']}) | "
-                        f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
-                    )
-
-        # ETAP 3: Skills (z filtrem management_levels)
+        # ETAP 2: Skills (z filtrem management_levels)
         if len(valid_contacts) < 3 and SKILLS_FOR_SEARCH:
-            st.info("🎯 Etap 3: wyszukiwanie po skills...")
+            st.info("🎯 Etap 2: wyszukiwanie po skills...")
             candidates = self._search(domain, "skills", SKILLS_FOR_SEARCH, exclude, 
                                      DEPARTMENTS_TO_EXCLUDE, management_levels_filter, country)
             for c in candidates:
@@ -314,6 +296,24 @@ class RocketReachAPI:
                     seen_emails.add(processed["email"])
                     st.success(
                         f"✅ Kontakt (skills): {processed['name']} ({processed['title']}) | "
+                        f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
+                    )
+
+        # ETAP 3: Departments (z filtrem management_levels)
+        if len(valid_contacts) < 3 and departments:
+            st.info("🔍 Etap 3: wyszukiwanie po departments...")
+            candidates = self._search(domain, "department", departments, exclude, 
+                                     DEPARTMENTS_TO_EXCLUDE, management_levels_filter, country)
+            for c in candidates:
+                if len(valid_contacts) >= 3:
+                    break
+                detail = self._lookup(c["id"])
+                processed = self._process(detail)
+                if processed and processed["email"] not in seen_emails:
+                    valid_contacts.append(processed)
+                    seen_emails.add(processed["email"])
+                    st.success(
+                        f"✅ Kontakt (department): {processed['name']} ({processed['title']}) | "
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
                     )
 
@@ -465,4 +465,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
