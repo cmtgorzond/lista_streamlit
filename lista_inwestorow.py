@@ -63,6 +63,17 @@ DEFAULT_MANAGEMENT_LEVELS = [
     "Founder/Owner", "C-Level", "Vice President", "Head", "Director", "Manager", "Senior"
 ]
 
+# Skills do wyszukiwania w etapie 3
+SKILLS_FOR_SEARCH = [
+    "M&A",
+    "corporate development",
+    "Merger",
+    "M and A",
+    "investment",
+    "Acquisitions",
+    "investor"
+]
+
 class RocketReachAPI:
     def __init__(self, api_key: str, strict_backoff: bool = True):
         self.api_key = api_key
@@ -256,9 +267,9 @@ class RocketReachAPI:
                     )
 
         # ETAP 3: Skills (z filtrem management_levels)
-        if len(valid_contacts) < 3 and titles:
+        if len(valid_contacts) < 3 and SKILLS_FOR_SEARCH:
             st.info("🎯 Etap 3: wyszukiwanie po skills...")
-            candidates = self._search(domain, "skills", titles, exclude, 
+            candidates = self._search(domain, "skills", SKILLS_FOR_SEARCH, exclude, 
                                      management_levels_filter, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
@@ -422,4 +433,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
