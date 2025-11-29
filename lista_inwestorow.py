@@ -373,7 +373,7 @@ def main():
         st.subheader("Wykluczenia")
         exclude = st.text_area(
             "Stanowiska do wykluczenia (jedna linia = jedno stanowisko)",
-            "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nAccount\nDeveloper\nCommercial\nEngineer\nController\nService\nPurchaser\ncustomer\nemployee\npricing\ntax\ncompliance\naudit",
+            "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nAccount\nDeveloper\nCommercial\nEngineer\nController\nService\nPurchaser\ncustomer\nemployee\npricing\ntax\ncompliance\naudit\nrecruiting",
             height=80
         ).splitlines()
         
@@ -466,4 +466,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
