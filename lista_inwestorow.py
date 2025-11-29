@@ -54,8 +54,7 @@ MANAGEMENT_LEVELS = [
 
 # Domyślnie zaznaczone departments
 DEFAULT_DEPARTMENTS = [
-    "Founder", "Finance Executive",
-    "Investment Management", "Financial Planning & Analysis", "Financial Strategy", "Operations Executive", "Corporate Strategy"
+    "Founder", "Finance Executive", "Investment Management", "Financial Strategy", "Corporate Strategy"
 ]
 
 # Domyślnie zaznaczone management levels dla filtrowania etapów 1-3
@@ -71,7 +70,9 @@ SKILLS_FOR_SEARCH = [
     "M and A",
     "investment",
     "Acquisitions",
-    "investor"
+    "investor",
+    "Private equity",
+    "Venture Capital"
 ]
 
 # Departments do wykluczenia na każdym etapie
@@ -359,7 +360,7 @@ def main():
         st.subheader("1️⃣ Keywords stanowisk")
         titles = st.text_area(
             "Nazwy stanowisk (jedna linia = jeden keyword)",
-            "M&A\ncorporate development\nstrategy\ngrowth\nMerger\nM and A\nstrategic\ninvestment\nAcquisitions\nOrigination\ninvestor\nDeal",
+            "M&A\ncorporate development\nstrategy\ngrowth\nmergers\nM and A\nstrategic\ninvestment\nacquisitions\norigination\ninvestor\ndeal\nPrivate Equity",
         ).splitlines()
         
         st.subheader("2️⃣ Departments")
@@ -372,7 +373,7 @@ def main():
         st.subheader("Wykluczenia")
         exclude = st.text_area(
             "Stanowiska do wykluczenia (jedna linia = jedno stanowisko)",
-            "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nAccount\nDeveloper\nCommercial\nEngineer\nController\nService\nPurchaser\ncustomer\nemployee\npricing",
+            "hr\nmarketing\nsales\npeople\ntalent\nproduct\nclient\nAccount\nDeveloper\nCommercial\nEngineer\nController\nService\nPurchaser\ncustomer\nemployee\npricing\ntax\ncompliance\naudit",
             height=80
         ).splitlines()
         
@@ -465,3 +466,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
