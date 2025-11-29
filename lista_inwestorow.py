@@ -80,7 +80,7 @@ class RocketReachAPI:
         now = time.time()
         self.request_timestamps = [t for t in self.request_timestamps if t > now - 1]
         if len(self.request_timestamps) >= 5:
-            sleep_time = 1.0 - (now - self.request_timestamps)
+            sleep_time = 1.0 - (now - self.request_timestamps[0])
             if sleep_time > 0:
                 time.sleep(sleep_time + random.uniform(0.1, 0.3))
         self.request_timestamps.append(time.time())
@@ -121,12 +121,17 @@ class RocketReachAPI:
         # Dodaj główne pole wyszukiwania
         payload["query"][field] = clean_values
         
-        # Dodaj wykluczenia
-        if exclude and field in ["current_title", "skills"]:
-            exclude_field = f"exclude_{field}"
-            payload["query"][exclude_field] = [e.strip() for e in exclude if e.strip()]
+        # Dodaj wykluczenia dla wszystkich etapów
+        if exclude:
+            if field == "current_title":
+                payload["query"]["exclude_current_title"] = [e.strip() for e in exclude if e.strip()]
+            elif field == "skills":
+                payload["query"]["exclude_skills"] = [e.strip() for e in exclude if e.strip()]
+            elif field == "management_levels":
+                # Dla etapu 4 - też dodaj exclude_current_title
+                payload["query"]["exclude_current_title"] = [e.strip() for e in exclude if e.strip()]
         
-        # Dodaj management levels jeśli wybrane (jako dodatkowy filtr dla wszystkich etapów)
+        # Dodaj management levels jeśli wybrane (jako dodatkowy filtr dla etapów 1-3)
         if management_levels and field != "management_levels":
             payload["query"]["management_levels"] = management_levels
         
@@ -418,7 +423,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
