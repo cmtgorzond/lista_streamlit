@@ -317,10 +317,10 @@ class RocketReachAPI:
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
                     )
 
-        # ETAP 4: Management Levels - STAŁY FILTR (Founder/Owner, C-Level, Vice President)
+        # ETAP 4: Management Levels - STAŁY FILTR (Founder/Owner, C-Level, Vice President, Head, Director)
         if len(valid_contacts) < 3:
-            st.info("👔 Etap 4: wyszukiwanie po management levels (Founder/Owner, C-Level, Vice President)...")
-            fixed_levels = ["Founder/Owner", "C-Level", "Vice President"]
+            st.info("👔 Etap 4: wyszukiwanie po management levels (Founder/Owner, C-Level, Vice President, Head, Director)...")
+            fixed_levels = ["Founder/Owner", "C-Level", "Vice President", "Head", "Director"]
             candidates = self._search(domain, "management_levels", fixed_levels, exclude, 
                                      DEPARTMENTS_TO_EXCLUDE, None, country)
             for c in candidates:
