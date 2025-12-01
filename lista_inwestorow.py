@@ -54,7 +54,7 @@ MANAGEMENT_LEVELS = [
 
 # Domyślnie zaznaczone departments
 DEFAULT_DEPARTMENTS = [
-    "Founder", "Finance Executive", "Investment Management", "Financial Strategy", "Corporate Strategy"
+    "Founder", "Finance Executive", "Investment Management", "Financial Strategy", "Corporate Strategy", "C-Suite"
 ]
 
 # Domyślnie zaznaczone management levels dla filtrowania etapów 1-3
@@ -194,7 +194,8 @@ class RocketReachAPI:
                         "id": p["id"],
                         "name": p["name"],
                         "title": p.get("current_title", ""),
-                        "linkedin": p.get("linkedin_url", "")
+                        "linkedin": p.get("linkedin_url", ""),
+                        "management_level": p.get("management_level", "")
                     }
                     for p in profiles[:15]  # Limit na 15 profili
                 ]
@@ -255,8 +256,20 @@ class RocketReachAPI:
             "email": email_obj.get("email", ""),
             "email_grade": email_obj.get("grade", ""),
             "smtp_valid": email_obj.get("smtp_valid", ""),
-            "linkedin": data.get("linkedin_url", "")
+            "linkedin": data.get("linkedin_url", ""),
+            "management_level": data.get("management_level", "")
         }
+
+    def _get_priority_score(self, management_level: str) -> int:
+        """Przyznaj priorytet na podstawie management level"""
+        priority_map = {
+            "Founder/Owner": 10,  # Najwyższy priorytet
+            "C-Level": 10,        # Najwyższy priorytet
+            "Vice President": 5,  # Średni priorytet
+            "Head": 5,            # Średni priorytet
+            "Director": 5         # Średni priorytet
+        }
+        return priority_map.get(management_level, 0)
 
     def search_with_emails(self, domain: str, titles: List[str], departments: List[str], 
                           exclude: List[str], management_levels_filter: Optional[List[str]], 
@@ -318,24 +331,36 @@ class RocketReachAPI:
                         f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
                     )
 
-        # ETAP 4: Management Levels - STAŁY FILTR (Founder/Owner, C-Level, Vice President, Head, Director)
+        # ETAP 4: Management Levels - STAŁY FILTR z SORTOWANIEM po priorytecie
         if len(valid_contacts) < 3:
-            st.info("👔 Etap 4: wyszukiwanie po management levels (Founder/Owner, C-Level, Vice President, Head, Director)...")
+            st.info("👔 Etap 4: wyszukiwanie po management levels (priorytet: Founder/Owner, C-Level)...")
             fixed_levels = ["Founder/Owner", "C-Level", "Vice President", "Head", "Director"]
             candidates = self._search(domain, "management_levels", fixed_levels, exclude, 
                                      DEPARTMENTS_TO_EXCLUDE, None, country)
+            
+            # Sortuj kandydatów po priorytecie (Founder/Owner i C-Level pierwszy)
+            candidates_with_priority = []
             for c in candidates:
-                if len(valid_contacts) >= 3:
-                    break
                 detail = self._lookup(c["id"])
                 processed = self._process(detail)
                 if processed and processed["email"] not in seen_emails:
-                    valid_contacts.append(processed)
-                    seen_emails.add(processed["email"])
-                    st.success(
-                        f"✅ Kontakt (management): {processed['name']} ({processed['title']}) | "
-                        f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
-                    )
+                    priority = self._get_priority_score(processed.get("management_level", ""))
+                    candidates_with_priority.append((priority, processed))
+            
+            # Sortuj malejąco po priorytecie (najwyższy najpierw)
+            candidates_with_priority.sort(key=lambda x: x[0], reverse=True)
+            
+            # Dodaj do valid_contacts aż do 3 kontaktów
+            for priority, processed in candidates_with_priority:
+                if len(valid_contacts) >= 3:
+                    break
+                valid_contacts.append(processed)
+                seen_emails.add(processed["email"])
+                priority_label = "🌟 (Founder/Owner lub C-Level)" if priority == 10 else "⭐ (VP/Head/Director)"
+                st.success(
+                    f"✅ Kontakt (management) {priority_label}: {processed['name']} ({processed['title']}) | "
+                    f"{processed['email']} (Grade:{processed['email_grade']}, SMTP:{processed['smtp_valid']})"
+                )
 
         st.info(f"📊 Łącznie: {len(valid_contacts)} kontaktów")
         return valid_contacts[:3]
