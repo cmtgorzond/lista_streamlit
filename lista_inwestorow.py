@@ -264,11 +264,11 @@ class RocketReachAPI:
         valid_contacts = []
         seen_emails = set()
 
-        # ETAP 1: Keywords stanowisk (z filtrem management_levels)
+        # ETAP 1: Keywords stanowisk (BEZ DEPARTMENTS_TO_EXCLUDE)
         if titles and len(valid_contacts) < 3:
             st.info("🔍 Etap 1: wyszukiwanie po keywords stanowisk...")
             candidates = self._search(domain, "current_title", titles, exclude, 
-                                     DEPARTMENTS_TO_EXCLUDE, management_levels_filter, country)
+                                     [], management_levels_filter, country)
             for c in candidates:
                 if len(valid_contacts) >= 3:
                     break
@@ -466,5 +466,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
